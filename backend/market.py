@@ -5,6 +5,7 @@ import csv
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
+from time import monotonic
 from typing import Annotated
 
 import httpx
@@ -13,6 +14,19 @@ from pydantic import BaseModel, Field, model_validator
 INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
              "4h": 14400, "1d": 86400, "1w": 604800}
 MT5_INTERVALS = dict(zip(INTERVALS, ("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")))
+
+
+# Shared pacing includes historical pagination and on-demand chart requests.
+next_market_request = 0.0
+
+
+async def wait_for_market_slot():
+    global next_market_request
+    now = monotonic()
+    slot = max(now, next_market_request)
+    next_market_request = slot + 0.2
+    if slot > now:
+        await asyncio.sleep(slot - now)
 
 
 class Candle(BaseModel):
@@ -62,6 +76,7 @@ async def get_candles(asset: Asset, interval: str, directory: Path, now: int, li
     async with httpx.AsyncClient(timeout=10) as client:
         while remaining > 0:
             size = min(1000, remaining)
+            await wait_for_market_slot()
             response = await client.get(
                 "https://data-api.binance.vision/api/v3/klines",
                 params={"symbol": asset.ticker, "interval": interval, "limit": size, "endTime": end},

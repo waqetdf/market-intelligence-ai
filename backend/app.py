@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 import httpx
-from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, create_engine, select
+from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, cast, create_engine, select
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 
@@ -264,7 +264,10 @@ async def chart(symbol: str, interval: str = "15m"):
 
 @api.get("/alerts")
 def list_alerts():
-    return sorted(stored(alerts), key=lambda alert: alert["observed_at"], reverse=True)[:100]
+    timestamp = cast(alerts.c.payload["observed_at"].as_string(), BigInteger)
+    query = select(alerts.c.payload).order_by(timestamp.desc()).limit(100)
+    with engine.connect() as connection:
+        return list(connection.scalars(query))
 
 
 @api.get("/history")

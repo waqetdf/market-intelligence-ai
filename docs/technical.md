@@ -88,3 +88,7 @@ MARKET_LIVE_TEST=1 uv run --locked python -m pytest -q
 La prueba usa un corte UTC fijo y compara las confirmaciones obtenidas
 en los prefijos con las del histórico completo. La CI habitual se puede
 ejecutar sin llamadas al proveedor.
+
+Las solicitudes del proceso a Binance se espacian al menos 200 ms,
+incluida la paginación del backtest. El panel reutiliza una caché breve
+de velas, y consulta el estado y los resultados cada 30 segundos.
