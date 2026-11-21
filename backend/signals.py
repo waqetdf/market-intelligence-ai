@@ -41,12 +41,14 @@ def opportunity(bars, context, current):
 
 def replay(bars, higher, fee_bps=10, slippage_bps=5):
     """At each close, simulate one next-bar holding period using its open and close."""
-    returns = []
+    trades = []
+    eligible = []
     for i in range(35, len(bars)):
         history = bars[max(0, i - 150):i]
         context = [bar for bar in higher if bar.close_time <= history[-1].close_time][-150:]
         if len(context) < 35 or bars[i].time < history[-1].close_time:
             continue
+        eligible.append(i)
         signal = opportunity(history, analyze(context), analyze(history))
         if signal["direction"] == "sin señal":
             continue
@@ -54,7 +56,25 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5):
         if trade.open <= 0:
             continue
         sign = 1 if signal["direction"] == "posible compra" else -1
-        returns.append(sign * (trade.close / trade.open - 1) - 2 * (fee_bps + slippage_bps) / 10000)
+        value = sign * (trade.close / trade.open - 1) - 2 * (fee_bps + slippage_bps) / 10000
+        trades.append((i, value, signal["reward_risk"]))
+    overall = metrics(trades)
+    if len(eligible) < 20:
+        return {**overall, "out_of_sample": None, "walk_forward": []}
+    holdout = eligible[len(eligible) * 3 // 4]
+    folds = []
+    for start in range(1, 4):
+        lower = eligible[len(eligible) * start // 4]
+        upper = eligible[len(eligible) * (start + 1) // 4] if start < 3 else len(bars)
+        folds.append({"start": bars[lower].time, "end": bars[upper - 1].close_time,
+                      **metrics([trade for trade in trades if lower <= trade[0] < upper])})
+    return {**overall, "out_of_sample": metrics([trade for trade in trades if trade[0] >= holdout]),
+            "walk_forward": folds}
+
+
+def metrics(trades):
+    returns = [trade[1] for trade in trades]
+    ratios = [trade[2] for trade in trades if trade[2] is not None]
     profits = sum(value for value in returns if value > 0)
     losses = -sum(value for value in returns if value < 0)
     equity = peak = 1.0
@@ -67,4 +87,5 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5):
             "win_rate": sum(value > 0 for value in returns) / len(returns) if returns else None,
             "profit_factor": profits / losses if losses else None,
             "expectancy": sum(returns) / len(returns) if returns else None,
-            "maximum_drawdown": drawdown if returns else None}
+            "maximum_drawdown": drawdown if returns else None,
+            "mean_signal_reward_risk": sum(ratios) / len(ratios) if ratios else None}

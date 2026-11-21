@@ -34,8 +34,10 @@ es el pivote superior más cercano que queda en la dirección de la señal.
 La simulación entra en la apertura siguiente y sale a su cierre. Resta
 comisiones y deslizamiento de ida y vuelta y no utiliza objetivos ni niveles
 de invalidación para simular la salida. Las métricas son descriptivas del
-histórico cargado. Todavía falta evaluación fuera de muestra, walk-forward
-y calibración de confianza.
+histórico cargado. Cuando hay al menos 20 barras evaluables, separa el último cuarto como
+tramo de reserva e informa tres ventanas cronológicas con historia
+creciente. Las reglas son fijas y no se optimizan en cada ventana.
+La calibración de confianza sigue pendiente.
 
 Para detectar un Order Block se toma el rango de la última vela contraria
 entre las diez anteriores a un BOS o CHoCH. El primer solapamiento posterior

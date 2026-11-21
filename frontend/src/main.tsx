@@ -7,6 +7,7 @@ type Asset = {symbol:string; source:string; ticker:string}
 type Bar = {time:UTCTimestamp; open:number; high:number; low:number; close:number}
 type Event = {kind:string; side:string; level:number; time:number}
 type Result = {bars:Bar[]; source:string; technical:{trend:string; events:Event[]; indicators:Record<string, number | number[] | null>}}
+type Simulation = Record<string,unknown>
 type News = {title:string; url:string; source:string; published:string|null}
 type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[]}
 
@@ -48,7 +49,7 @@ function App() {
   const [overlays,setOverlays] = useState(true)
   const [error,setError] = useState('')
   const [formError,setFormError] = useState('')
-  const [simulation,setSimulation] = useState<Record<string,number|string|null>>()
+  const [simulation,setSimulation] = useState<Simulation>()
   const [loading,setLoading] = useState(false)
   const [news,setNews] = useState<News[]>([])
   const [context,setContext] = useState('')
@@ -85,6 +86,8 @@ function App() {
       setAssets(items=>[...items,item]); setSymbol(item.symbol)
     } catch(e) {setFormError((e as Error).message)}
   }
+  const holdout = simulation?.out_of_sample as {count:number; expectancy:number|null}|null|undefined
+  const folds = simulation?.walk_forward as {start:number; end:number; count:number}[]|undefined
   return <main>
     <header><span>MARKET INTELLIGENCE</span><h1>Observatorio de mercados</h1></header>
     <section className="workspace">
@@ -108,7 +111,10 @@ function App() {
     </section>
     <section className="workspace">
       <article className="panel"><h2>Alertas recientes</h2>{alerts.length ? alerts.map(a=><p key={a.symbol+a.observed_at}>{a.symbol} · {a.direction} · {a.price} · {new Date(a.observed_at*1000).toLocaleString()}<br/>{a.evidence.join(' · ')}</p>) : <p>Sin alertas registradas</p>}</article>
-      <article className="panel"><h2>Simulación histórica</h2><button disabled={!symbol} onClick={()=>api<Record<string,number|string|null>>('/backtest?'+new URLSearchParams({symbol})).then(setSimulation).catch(e=>setError(e.message))}>Ejecutar</button>{simulation && <dl>{Object.entries(simulation).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value === 'number' ? Number(value.toFixed(4)) : value ?? '—'}</dd></div>)}</dl>}</article>
+      <article className="panel"><h2>Simulación histórica</h2><button disabled={!symbol} onClick={()=>api<Simulation>('/backtest?'+new URLSearchParams({symbol})).then(setSimulation).catch(e=>setError(e.message))}>Ejecutar</button>{simulation && <dl>{Object.entries(simulation).filter(([,value])=>value == null || typeof value !== 'object').map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value === 'number' ? Number(value.toFixed(4)) : String(value ?? '—')}</dd></div>)}</dl>}
+        {holdout && <p>Último tramo · {holdout.count} señales · Expectativa {holdout.expectancy?.toFixed(4) ?? '—'}</p>}
+        {!!folds?.length && <p>Ventanas cronológicas · {folds.map(fold=>fold.count).join(' / ')} señales</p>}
+      </article>
     </section>
     <section className="workspace">
       <article className="panel"><h2>Noticias</h2>{news.length ? news.slice(0,12).map(n=><p key={n.url}><a href={n.url} target="_blank" rel="noreferrer">{n.title}</a><br/>{n.source} {n.published}</p>) : <p>Sin titulares disponibles</p>}
