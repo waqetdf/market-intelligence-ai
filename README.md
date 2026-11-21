@@ -100,3 +100,7 @@ configurado por el operador.
 Una vez configurados en `.env`, Ollama o la API externa, Discord y
 Telegram se pueden activar o pausar desde el panel. Las credenciales
 permanecen en el servidor y no se devuelven al navegador.
+
+Usa URLs RSS públicas sin credenciales en la lista de fuentes. Los tokens
+de Telegram y Discord se guardan en sus variables dedicadas. Las solicitudes
+HTTP salientes no registran sus URLs en el log habitual.

@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
@@ -17,12 +16,15 @@ from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, create
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 
+from backend.alerts import notify
 from backend.market import Asset, INTERVALS, get_candles
 from backend.news import commentary, feed_urls, fetch_news, relevant_news
 from backend.signals import opportunity, replay
 from backend.technical import analyze
 
 logging.basicConfig(level=logging.INFO)
+# Outbound request URLs may carry webhook or bot credentials.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 data = Path(os.getenv("MARKET_DATA_DIR", "data"))
 metadata = MetaData()
@@ -125,37 +127,6 @@ async def candles(asset, interval, limit=300):
     return result
 
 
-async def notify(payload):
-    lines = [f"MARKET INTELLIGENCE · {payload['direction'].upper()}",
-             f"{payload['symbol']} · {payload['timeframe']} · {payload['price']}",
-             datetime.fromtimestamp(payload["observed_at"], timezone.utc).isoformat(),
-             *payload["evidence"],
-             f"Invalidación: {payload['invalidation']} · Objetivo: {payload['target']}",
-             f"Zona: {payload.get('interest_zone', '—')} · R/B: {payload['reward_risk']}",
-             "Calidad: pendiente de calibración",
-             *payload["risks"],
-             "Aviso informativo. No se ha ejecutado ninguna operación."]
-    if payload["chart"]:
-        lines.append(payload["chart"])
-    if payload["news"]:
-        lines += [payload["news"][0]["title"], payload["news"][0]["url"]]
-    message = "\n".join(lines)
-    messages = []
-    enabled = enabled_integrations()
-    if enabled["discord"] and (discord := os.getenv("DISCORD_WEBHOOK_URL")):
-        messages.append(("discord", discord, {"content": message[:1900], "allowed_mentions": {"parse": []}}))
-    if enabled["telegram"] and (telegram := os.getenv("TELEGRAM_BOT_TOKEN")) and (chat := os.getenv("TELEGRAM_CHAT_ID")):
-        messages.append(("telegram", f"https://api.telegram.org/bot{telegram}/sendMessage",
-                         {"chat_id": chat, "text": message[:3900]}))
-    async with httpx.AsyncClient(timeout=10) as client:
-        for channel, url, body in messages:
-            try:
-                response = await client.post(url, json=body)
-                response.raise_for_status()
-            except (httpx.HTTPError, ValueError) as exc:
-                log.warning("Alert delivery failed for %s (%s)", channel, type(exc).__name__)
-
-
 async def scan_asset(asset):
     frames = await asyncio.gather(*(candles(asset, interval) for interval in INTERVALS),
                                   return_exceptions=True)
@@ -206,7 +177,7 @@ async def scan_asset(asset):
     except IntegrityError:
         return
     if deliver:
-        await notify(payload)
+        await notify(payload, enabled_integrations())
 
 
 async def monitor():
