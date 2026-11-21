@@ -32,3 +32,13 @@ def test_order_block_updates_only_after_breakout():
     invalid = analyze([*bars, candle(6, 1, 1.5)])
     assert invalid["blocks"][0]["state"] == "invalidado"
     assert any(event["kind"] == "Breaker Block" for event in invalid["events"])
+
+
+def test_provisional_swing_and_failed_breakout_are_separate_from_confirmation():
+    bars = [candle(i, value - 1, value) for i, value in enumerate([3, 4, 8, 4, 3, 10, 7])]
+    early = analyze(bars[:3])
+    assert any(pattern["kind"] == "Swing High" for pattern in early["provisional"])
+    assert not any(event["kind"] == "Swing High" for event in early["events"])
+    assert not any(event["kind"] == "False Breakout" for event in analyze(bars[:6])["events"])
+    failed = next(event for event in analyze(bars)["events"] if event["kind"] == "False Breakout")
+    assert failed["confirmed_at"] == bars[-1].close_time

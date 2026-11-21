@@ -1,5 +1,6 @@
 """Causal market structure and indicators computed from closed bars."""
 
+import os
 from statistics import fmean, pstdev
 
 from backend.market import Candle
@@ -12,16 +13,31 @@ def ema(values, period):
     return result
 
 
-def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
+def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | None = None):
+    swing = swing if swing is not None else max(1, int(os.getenv("MARKET_SWING_RADIUS", "2")))
+    tolerance = tolerance if tolerance is not None else max(0, float(os.getenv("MARKET_EQUAL_TOLERANCE", "0.001")))
+    mss_multiple = max(0, float(os.getenv("MARKET_MSS_RANGE_MULTIPLE", "1")))
+    block_lookback = max(1, int(os.getenv("MARKET_BLOCK_LOOKBACK", "10")))
+    if swing < 1 or tolerance < 0:
+        raise ValueError("Invalid detector parameters")
     events = []
     highs, lows = [], []
     broken = set()
+    breaks = {}
     gaps = []
     blocks = []
     trend = "lateral"
     for i, bar in enumerate(bars):
         def event(kind, side, level, **details):
-            events.append(dict(kind=kind, side=side, level=level, time=bar.time, **details))
+            events.append(dict(kind=kind, side=side, level=level, time=bar.time, confirmed_at=bar.close_time, state="confirmado", **details))
+
+        for side, (level, opened) in list(breaks.items()):
+            if i - opened > 3:
+                del breaks[side]
+            elif (bar.close <= level if side == "alcista" else bar.close >= level):
+                event("False Breakout", "bajista" if side == "alcista" else "alcista",
+                      level, origin=bars[opened].time)
+                del breaks[side]
 
         for block in blocks:
             if block["state"] == "invalidado":
@@ -64,18 +80,19 @@ def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
                 continue
             if sign * (bar.close - level) > 0:
                 kind = "BOS" if trend in ("lateral", side) else "CHoCH"
-                if kind == "CHoCH" and i > 1 and abs(bar.close - bar.open) > fmean(
+                if kind == "CHoCH" and i > 1 and abs(bar.close - bar.open) > mss_multiple * fmean(
                     item.high - item.low for item in bars[max(0, i - 14):i]
                 ):
                     event("MSS", side, level)
                 event(kind, side, level)
-                opposing = next((item for item in reversed(bars[max(0, i - 10):i])
+                opposing = next((item for item in reversed(bars[max(0, i - block_lookback):i])
                                  if sign * (item.close - item.open) < 0), None)
                 if opposing:
                     block = dict(side=side, low=opposing.low, high=opposing.high,
                                  state="abierto", time=bar.time, origin=opposing.time)
                     blocks.append(block)
                     event("Order Block", side, opposing.low, high=opposing.high, origin=opposing.time)
+                breaks[side] = (level, i)
                 broken.add(key)
                 trend = side
             else:
@@ -101,8 +118,19 @@ def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
                 event("FVG", "bajista", bar.high, high=previous.low)
     support = lows[-1][1] if lows else None
     resistance = highs[-1][1] if highs else None
-    return dict(trend=trend, support=support, resistance=resistance,
-                equilibrium=(support + resistance) / 2 if support is not None and resistance is not None else None,
+    provisional = []
+    for i in range(max(swing, len(bars) - swing), len(bars)):
+        for key, sign, kind in (("high", 1, "Swing High"), ("low", -1, "Swing Low")):
+            level = getattr(bars[i], key)
+            if all(sign * level > sign * getattr(bars[j], key)
+                   for j in range(i - swing, len(bars)) if j != i):
+                provisional.append(dict(kind=kind, level=level, time=bars[i].time,
+                                        state="provisional", confirmed_at=None))
+    equilibrium = (support + resistance) / 2 if support is not None and resistance is not None and support < resistance else None
+    return dict(trend=trend, support=support, resistance=resistance, equilibrium=equilibrium,
+                premium=[equilibrium, resistance] if equilibrium is not None else None,
+                discount=[support, equilibrium] if equilibrium is not None else None,
+                provisional=provisional,
                 events=events, gaps=gaps, blocks=blocks,
                 buy_side_liquidity=resistance, sell_side_liquidity=support,
                 indicators=indicators(bars))

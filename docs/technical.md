@@ -62,3 +62,14 @@ siguiente si su magnitud supera el coste redondo. Una alerta en sentido
 equivocado cuenta como falso positivo y oportunidad omitida. Las velas sin
 alerta forman parte del denominador del recall. Estas etiquetas describen
 la prueba de una vela y no calibran la probabilidad de nuevas señales.
+
+Los pivotes provisionales se devuelven por separado y nunca se usan en
+señales. Un cierre de vuelta al nivel roto en una de las tres velas
+siguientes confirma una falsa ruptura. Cada evento publica la hora real
+de confirmación en `confirmed_at`. Premium corresponde al intervalo entre
+el punto medio y el swing alto, y Discount entre el swing bajo y el punto
+medio, cuando el rango es válido. El FVG de tres velas es la definición de
+desequilibrio empleada. El radio de pivote y la tolerancia de igualdad se
+configuran con `MARKET_SWING_RADIUS` y `MARKET_EQUAL_TOLERANCE`, y el umbral
+MSS y la ventana Order Block con `MARKET_MSS_RANGE_MULTIPLE` y
+`MARKET_BLOCK_LOOKBACK`.
