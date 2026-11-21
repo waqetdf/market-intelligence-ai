@@ -8,7 +8,7 @@ import secrets
 from time import time
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -75,15 +75,15 @@ def stored(table):
         return list(connection.scalars(select(table.c.payload)).all())
 
 
-async def candles(asset, interval, use_cache=True):
+async def candles(asset, interval, limit=300):
     now = int(time())
-    key = (asset.symbol, asset.source, asset.ticker, interval)
+    key = (asset.symbol, asset.source, asset.ticker, interval, limit)
     cached = cache.get(key)
-    if cached and use_cache and now - cached[0] < 30:
+    if cached and now - cached[0] < 30:
         return cached[1]
     try:
         async with provider_slots:
-            result = await get_candles(asset, interval, data / "mt5", now)
+            result = await get_candles(asset, interval, data / "mt5", now, limit=limit)
     except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError) as exc:
         status[f"{asset.symbol} {interval}"] = {"status": "error", "reason": type(exc).__name__}
         raise HTTPException(502, f"Datos no disponibles para {asset.symbol} {interval}") from exc
@@ -283,10 +283,17 @@ def source_status():
 
 
 @api.get("/backtest")
-async def backtest(symbol: str):
+async def backtest(
+    symbol: str, count: Annotated[int, Query(ge=300, le=5000)] = 3000,
+    fee_bps: Annotated[float, Query(ge=0, le=500)] = 10,
+    slippage_bps: Annotated[float, Query(ge=0, le=500)] = 5,
+):
     asset = lookup(symbol)
-    low, high = await asyncio.gather(candles(asset, "15m"), candles(asset, "4h"))
-    return await asyncio.to_thread(replay, low, high)
+    low, high = await asyncio.gather(candles(asset, "15m", count),
+                                     candles(asset, "4h", max(300, count // 16 + 150)))
+    report = await asyncio.to_thread(replay, low, high, fee_bps, slippage_bps)
+    return dict(report, symbol=symbol, timeframe="15m", candle_count=len(low),
+                fee_bps=fee_bps, slippage_bps=slippage_bps)
 
 
 @api.get("/news")

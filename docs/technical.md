@@ -53,3 +53,12 @@ periodos de antigüedad. Persiste también «sin señal» por activo y cierre de
 distancia en ATR y tendencias contrarias en 1h, 1d o 1w. El volumen mínimo y
 la ventana de rupturas se configuran con `MARKET_RELATIVE_VOLUME_MIN` y
 `MARKET_STRUCTURE_WINDOW`. Se omite la puntuación hasta disponer de calibración.
+
+El backtest admite de 300 a 5.000 velas de 15m, costes configurables en
+puntos básicos y deduplicación por ruptura. Omite huecos entre decisión y
+entrada y contextos de 4h desactualizados. Para precision y recall, la
+etiqueta de referencia es el signo del retorno apertura-cierre de la vela
+siguiente si su magnitud supera el coste redondo. Una alerta en sentido
+equivocado cuenta como falso positivo y oportunidad omitida. Las velas sin
+alerta forman parte del denominador del recall. Estas etiquetas describen
+la prueba de una vela y no calibran la probabilidad de nuevas señales.

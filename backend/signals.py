@@ -68,22 +68,29 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5):
     """At each close, simulate one next-bar holding period using its open and close."""
     trades = []
     eligible = []
+    emitted = set()
+    labeled = []
+    costs = 2 * (fee_bps + slippage_bps) / 10000
     for i in range(35, len(bars)):
         history = bars[max(0, i - 150):i]
         context = [bar for bar in higher if bar.close_time <= history[-1].close_time][-150:]
-        if len(context) < 35 or bars[i].time < history[-1].close_time:
+        if len(context) < 35 or bars[i].open <= 0 or bars[i].time != history[-1].close_time:
+            continue
+        if history[-1].close_time - context[-1].close_time >= 28800:
             continue
         eligible.append(i)
         signal = opportunity(history, analyze(context), analyze(history))
-        if signal["direction"] == "sin señal":
-            continue
-        trade = bars[i]
-        if trade.open <= 0:
-            continue
-        sign = 1 if signal["direction"] == "posible compra" else -1
-        value = sign * (trade.close / trade.open - 1) - 2 * (fee_bps + slippage_bps) / 10000
-        trades.append((i, value, signal["reward_risk"]))
-    overall = metrics(trades)
+        price_move = bars[i].close / bars[i].open - 1
+        label = (price_move > costs) - (price_move < -costs)
+        key = (signal.get("trigger_time"), signal["direction"])
+        direction = 0
+        if signal["direction"] != "sin señal" and key not in emitted:
+            emitted.add(key)
+            direction = 1 if signal["direction"] == "posible compra" else -1
+            value = direction * price_move - costs
+            trades.append((i, value, signal["reward_risk"]))
+        labeled.append((i, label, direction))
+    overall = metrics(trades, labeled)
     if len(eligible) < 20:
         return {**overall, "out_of_sample": None, "walk_forward": []}
     holdout = eligible[len(eligible) * 3 // 4]
@@ -92,12 +99,17 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5):
         lower = eligible[len(eligible) * start // 4]
         upper = eligible[len(eligible) * (start + 1) // 4] if start < 3 else len(bars)
         folds.append({"start": bars[lower].time, "end": bars[upper - 1].close_time,
-                      **metrics([trade for trade in trades if lower <= trade[0] < upper])})
-    return {**overall, "out_of_sample": metrics([trade for trade in trades if trade[0] >= holdout]),
+                      **metrics([trade for trade in trades if lower <= trade[0] < upper],
+                                [row for row in labeled if lower <= row[0] < upper])})
+    return {**overall, "out_of_sample": metrics([trade for trade in trades if trade[0] >= holdout],
+                                                       [row for row in labeled if row[0] >= holdout]),
             "walk_forward": folds}
 
 
-def metrics(trades):
+def metrics(trades, labeled):
+    correct = sum(label != 0 and label == direction for _, label, direction in labeled)
+    positives = sum(label != 0 for _, label, _ in labeled)
+    alerts = sum(direction != 0 for _, _, direction in labeled)
     returns = [trade[1] for trade in trades]
     ratios = [trade[2] for trade in trades if trade[2] is not None]
     profits = sum(value for value in returns if value > 0)
@@ -109,6 +121,10 @@ def metrics(trades):
         peak = max(peak, equity)
         drawdown = max(drawdown, 1 - equity / peak)
     return {"mode": "simulación a una vela", "count": len(returns),
+            "eligible_bars": len(labeled), "without_alert": len(labeled) - alerts,
+            "false_positives": alerts - correct,
+            "precision": correct / alerts if alerts else None,
+            "recall": correct / positives if positives else None,
             "win_rate": sum(value > 0 for value in returns) / len(returns) if returns else None,
             "profit_factor": profits / losses if losses else None,
             "expectancy": sum(returns) / len(returns) if returns else None,

@@ -56,15 +56,27 @@ def closed_candles(rows: list[Candle], now: int, limit: int) -> list[Candle]:
 async def get_candles(asset: Asset, interval: str, directory: Path, now: int, limit: int = 300):
     if asset.source == "mt5-csv":
         return await asyncio.to_thread(read_mt5_csv, directory, asset.ticker, interval, now, limit)
+    rows = []
+    end = now * 1000
+    remaining = limit + 1
     async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(
-            "https://data-api.binance.vision/api/v3/klines",
-            params={"symbol": asset.ticker, "interval": interval, "limit": limit + 1},
-        )
-        response.raise_for_status()
-    rows = [Candle(time=row[0] // 1000, close_time=(row[6] + 1) // 1000,
-                   open=row[1], high=row[2], low=row[3], close=row[4], volume=row[5])
-            for row in response.json()]
+        while remaining > 0:
+            size = min(1000, remaining)
+            response = await client.get(
+                "https://data-api.binance.vision/api/v3/klines",
+                params={"symbol": asset.ticker, "interval": interval, "limit": size, "endTime": end},
+            )
+            response.raise_for_status()
+            page = response.json()
+            if not page:
+                break
+            rows.extend(Candle(time=row[0] // 1000, close_time=(row[6] + 1) // 1000,
+                               open=row[1], high=row[2], low=row[3], close=row[4], volume=row[5])
+                        for row in page)
+            if len(page) < size:
+                break
+            remaining -= len(page)
+            end = page[0][0] - 1
     return closed_candles(rows, now, limit)
 
 
