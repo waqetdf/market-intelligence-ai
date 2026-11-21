@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
@@ -14,9 +15,10 @@ from fastapi.staticfiles import StaticFiles
 import httpx
 from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, create_engine, select
 from sqlalchemy.exc import IntegrityError
+from pydantic import BaseModel, Field
 
 from backend.market import Asset, INTERVALS, get_candles
-from backend.news import commentary, fetch_news
+from backend.news import commentary, feed_urls, fetch_news, relevant_news
 from backend.signals import opportunity, replay
 from backend.technical import analyze
 
@@ -29,12 +31,32 @@ alerts = Table("alerts", metadata, Column("key", String, primary_key=True), Colu
 decisions = Table("decisions", metadata,
                   Column("symbol", String, primary_key=True),
                   Column("observed_at", BigInteger, primary_key=True), Column("payload", JSON))
+settings = Table("settings", metadata, Column("key", String, primary_key=True), Column("payload", JSON))
 engine = create_engine(os.getenv("DATABASE_URL", f"sqlite:///{data / 'market.db'}"))
 status = {}
 cache = {}
 provider_slots = asyncio.Semaphore(3)
 started_at = int(time())
 monitor_state = {}
+news_report = {"items": [], "errors": []}
+news_checked = 0
+
+
+class FeedSelection(BaseModel):
+    urls: list[str] = Field(max_length=10)
+
+
+def enabled_feeds():
+    with engine.connect() as connection:
+        saved = connection.scalar(select(settings.c.payload).where(settings.c.key == "news"))
+    allowed = feed_urls()
+    return allowed if saved is None else [url for url in saved if url in allowed]
+
+
+async def refresh_news():
+    global news_report, news_checked
+    news_report = await fetch_news(enabled_feeds())
+    news_checked = int(time())
 basic = HTTPBasic(auto_error=False)
 
 
@@ -72,12 +94,26 @@ async def candles(asset, interval, use_cache=True):
 
 
 async def notify(payload):
+    lines = [f"MARKET INTELLIGENCE · {payload['direction'].upper()}",
+             f"{payload['symbol']} · {payload['timeframe']} · {payload['price']}",
+             datetime.fromtimestamp(payload["observed_at"], timezone.utc).isoformat(),
+             *payload["evidence"],
+             f"Invalidación: {payload['invalidation']} · Objetivo: {payload['target']}",
+             f"Zona: {payload.get('interest_zone', '—')} · R/B: {payload['reward_risk']}",
+             "Calidad: pendiente de calibración",
+             *payload["risks"],
+             "Aviso informativo. No se ha ejecutado ninguna operación."]
+    if payload["chart"]:
+        lines.append(payload["chart"])
+    if payload["news"]:
+        lines += [payload["news"][0]["title"], payload["news"][0]["url"]]
+    message = "\n".join(lines)
     messages = []
     if discord := os.getenv("DISCORD_WEBHOOK_URL"):
-        messages.append(("discord", discord, {"content": str(payload)[:1900], "allowed_mentions": {"parse": []}}))
+        messages.append(("discord", discord, {"content": message[:1900], "allowed_mentions": {"parse": []}}))
     if (telegram := os.getenv("TELEGRAM_BOT_TOKEN")) and (chat := os.getenv("TELEGRAM_CHAT_ID")):
         messages.append(("telegram", f"https://api.telegram.org/bot{telegram}/sendMessage",
-                         {"chat_id": chat, "text": str(payload)[:3900]}))
+                         {"chat_id": chat, "text": message[:3900]}))
     async with httpx.AsyncClient(timeout=10) as client:
         for channel, url, body in messages:
             try:
@@ -113,7 +149,10 @@ async def scan_asset(asset):
             snapshots[interval] = analyze(closed)
     current = snapshots["15m"]
     outcome = opportunity(low, snapshots.get("4h"), current, snapshots)
-    payload = dict(outcome, symbol=asset.symbol, timeframe="15m", price=low[-1].close,
+    items = relevant_news(news_report["items"], asset, low, observed)
+    if any(item["volatility_watch"] for item in items):
+        outcome["risks"].append("Titular reciente asociado a posible volatilidad")
+    payload = dict(outcome, news=items, symbol=asset.symbol, timeframe="15m", price=low[-1].close,
                    observed_at=observed, source=asset.source,
                    trends={interval: report["trend"] for interval, report in snapshots.items()},
                    mode="observación en tiempo real",
@@ -141,6 +180,8 @@ async def monitor():
     delay = max(60, int(os.getenv("MARKET_POLL_SECONDS", "60")))
     while True:
         try:
+            if int(time()) - news_checked >= 300:
+                await refresh_news()
             for item in stored(assets):
                 try:
                     await scan_asset(Asset.model_validate(item))
@@ -157,7 +198,9 @@ async def monitor():
 async def lifespan(_app):
     if os.getenv("MARKET_REQUIRE_AUTH") == "1" and not os.getenv("MARKET_PASSWORD"):
         raise RuntimeError("MARKET_PASSWORD is required")
-    global provider_slots
+    global provider_slots, news_checked, news_report
+    news_checked = 0
+    news_report = {"items": [], "errors": []}
     provider_slots = asyncio.Semaphore(3)
     cache.clear()
     status.clear()
@@ -248,17 +291,42 @@ async def backtest(symbol: str):
 
 @api.get("/news")
 async def news():
-    return await fetch_news()
+    return {**news_report, "checked_at": news_checked or None}
+
+
+@api.get("/settings")
+def read_settings():
+    return {"feeds": {"allowed": feed_urls(), "enabled": enabled_feeds()},
+            "ai": {"provider": os.getenv("MARKET_AI_PROVIDER", "off"),
+                   "model": os.getenv("MARKET_AI_MODEL")},
+            "notifications": {"discord": bool(os.getenv("DISCORD_WEBHOOK_URL")),
+                              "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))}}
+
+
+@api.put("/settings/feeds")
+async def set_feeds(selection: FeedSelection):
+    allowed = feed_urls()
+    if len(set(selection.urls)) != len(selection.urls) or any(url not in allowed for url in selection.urls):
+        raise HTTPException(422, "Selecciona fuentes autorizadas en el servidor")
+    statement = settings.update().where(settings.c.key == "news").values(payload=selection.urls)
+    with engine.begin() as connection:
+        if connection.execute(statement).rowcount == 0:
+            try:
+                with connection.begin_nested():
+                    connection.execute(settings.insert().values(key="news", payload=selection.urls))
+            except IntegrityError:
+                connection.execute(statement)
+    await refresh_news()
+    return read_settings()
 
 
 @api.get("/context")
 async def context(symbol: str):
     asset = lookup(symbol)
     bars = await candles(asset, "15m")
-    report = await fetch_news()
     technical = analyze(bars)
     data = {"symbol": symbol, "source": asset.source, "last_close": bars[-1].model_dump() if bars else None,
-            "trend": technical["trend"], "events": technical["events"][-8:], "news": report["items"][:12]}
+            "trend": technical["trend"], "events": technical["events"][-8:], "news": relevant_news(news_report["items"], asset, bars, int(time()))}
     return await commentary(data)
 
 

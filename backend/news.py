@@ -3,6 +3,9 @@
 import asyncio
 import json
 import os
+import re
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 from defusedxml import ElementTree
@@ -29,7 +32,63 @@ def parse_feed(content, source):
     return result
 
 
-async def fetch_news():
+def publication_time(value):
+    if not value:
+        return None
+    for parse in (datetime.fromisoformat, parsedate_to_datetime):
+        try:
+            stamp = parse(value)
+            if stamp.utcoffset() is not None:
+                return int(stamp.timestamp())
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return None
+
+
+ECONOMIC_EVENTS = {
+    "tipos de interés": r"interest rate|rate cut|rate hike|monetary policy|fomc|tipos de interés",
+    "inflación": r"inflation|consumer price|cpi|inflación",
+    "empleo": r"payrolls|unemployment|jobless|desempleo",
+    "resultados": r"earnings|quarterly results|resultados trimestrales",
+}
+
+
+def relevant_news(items, asset, bars, as_of):
+    """Link headlines to observable price changes after publication."""
+    aliases = set(asset.symbol.casefold().split("/")) | {asset.ticker.casefold()}
+    if "/" in asset.symbol:
+        aliases.discard(asset.symbol.casefold().split("/")[-1])
+    aliases |= {"bitcoin"} if asset.symbol.startswith("BTC/") else set()
+    aliases |= {"gold", "oro"} if asset.symbol == "XAUUSD" else set()
+    result = []
+    for item in items:
+        timestamp = publication_time(item["published"])
+        if timestamp is None or not 0 <= as_of - timestamp <= 86400:
+            continue
+        title = item["title"].casefold()
+        matches = aliases & set(re.findall(r"[\w.-]+", title))
+        event = next((name for name, pattern in ECONOMIC_EVENTS.items() if re.search(pattern, title)), None)
+        if not matches and not event:
+            continue
+        if event == "resultados" and not matches:
+            continue
+        positive = bool(re.search(r"\b(rises?|gains?|beats?|surges?|sube|crece)\b", title))
+        negative = bool(re.search(r"\b(falls?|drops?|misses?|slumps?|cae|baja)\b", title))
+        speculative = bool(re.search(r"\b(could|might|forecast|opinion|expected|podría|prevé)\b", title))
+        before = next((bar for bar in reversed(bars) if bar.close_time <= timestamp), None)
+        after = next((bar for bar in bars if bar.time >= timestamp and bar.close_time <= as_of), None)
+        comparison = None
+        if before and after and before.close:
+            comparison = {"from": before.close_time, "to": after.close_time,
+                          "return": after.close / before.close - 1}
+        result.append(dict(item, timestamp=timestamp, event=event, volatility_watch=bool(event),
+                           claim="opinión o expectativa" if speculative else "titular sin verificar",
+                           sentiment="neutral" if positive == negative else "positivo" if positive else "negativo",
+                           price_comparison=comparison))
+    return sorted(result, key=lambda item: item["timestamp"], reverse=True)[:12]
+
+
+async def fetch_news(urls=None):
     async with httpx.AsyncClient(timeout=8) as client:
         async def fetch(url):
             try:
@@ -44,7 +103,7 @@ async def fetch_news():
             except (httpx.HTTPError, ValueError, ElementTree.ParseError, DefusedXmlException) as exc:
                 return [], {"source": urlsplit(url).hostname, "error": type(exc).__name__}
 
-        groups = await asyncio.gather(*(fetch(url) for url in feed_urls()))
+        groups = await asyncio.gather(*(fetch(url) for url in (feed_urls() if urls is None else urls)))
     titles, urls, items, errors = set(), set(), [], []
     for entries, error in groups:
         if error:

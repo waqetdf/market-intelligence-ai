@@ -76,3 +76,11 @@ Si Docker se construye detrás de un proxy TLS corporativo, proporciona
 su cadena de confianza mediante el secreto de compilación BuildKit
 `build_ca`. El Dockerfile la usa solo durante la instalación y conserva
 la verificación de TLS.
+
+El monitor actualiza los RSS cada cinco minutos. El administrador puede
+habilitar o retirar desde el panel las URLs declaradas en `MARKET_NEWS_FEEDS`.
+El listado del servidor limita qué destinos puede consultar el backend.
+El análisis vincula titulares por símbolo o evento macro, etiqueta el
+sentimiento léxico y compara cierres observados antes y después. La etiqueta
+«titular sin verificar» conserva la distinción entre lo publicado y lo
+confirmado de forma independiente. Los titulares no determinan la dirección.
