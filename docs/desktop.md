@@ -16,7 +16,8 @@ de la carpeta `MarketIntelligenceAI`.
 - **Linux x64**. El paquete se compila para Ubuntu 24.04. Desde la carpeta
   extraída ejecuta `./MarketIntelligenceAI`. Si tu instalación de Ubuntu
   carece de bibliotecas gráficas de Qt o Chromium, instala
-  `libxcb-cursor0`, `libxkbcommon-x11-0`, `libnss3` y `libasound2t64`.
+  `libegl1`, `libgl1`, `libgbm1`, `libxcb-cursor0`,
+  `libxkbcommon-x11-0`, `libnss3` y `libasound2t64`.
 
 Los paquetes son portátiles y se distribuyen sin firma de código.
 Actualiza descargando una compilación nueva y sustituyendo los archivos
