@@ -39,10 +39,20 @@ jobs:
           timeout 45s dist/MarketIntelligenceAI/MarketIntelligenceAI --smoke-test
           tar -czf Market-Intelligence-AI-Linux-x64.tar.gz -C dist MarketIntelligenceAI
       - if: runner.os == 'Windows'
+        name: Smoke test Windows package
+        timeout-minutes: 2
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_OPENGL: software
         run: |
-          $process = Start-Process -FilePath "dist/MarketIntelligenceAI/MarketIntelligenceAI.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          $process = Start-Process -FilePath "dist/MarketIntelligenceAI/MarketIntelligenceAI.exe" -ArgumentList "--smoke-test" -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            $process.Kill()
+            throw "Desktop smoke test exceeded 45 seconds"
+          }
           if ($process.ExitCode -ne 0) { exit $process.ExitCode }
-          Compress-Archive -Path dist/MarketIntelligenceAI -DestinationPath Market-Intelligence-AI-Windows-x64.zip
+      - if: runner.os == 'Windows'
+        run: tar.exe -a -cf Market-Intelligence-AI-Windows-x64.zip -C dist MarketIntelligenceAI
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
