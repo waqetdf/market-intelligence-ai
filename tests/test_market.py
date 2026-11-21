@@ -42,3 +42,17 @@ def test_provisional_swing_and_failed_breakout_are_separate_from_confirmation():
     assert not any(event["kind"] == "False Breakout" for event in analyze(bars[:6])["events"])
     failed = next(event for event in analyze(bars)["events"] if event["kind"] == "False Breakout")
     assert failed["confirmed_at"] == bars[-1].close_time
+
+
+def test_chart_lines_match_snapshot_and_sma_warmup(monkeypatch):
+    from backend.technical import chart_indicators, indicators
+
+    monkeypatch.setenv("MARKET_MA_PERIOD", "5")
+    bars = [Candle(time=i * 60, close_time=(i + 1) * 60, open=i + 10,
+                   high=i + 11, low=i + 9, close=i + 10, volume=100) for i in range(40)]
+    lines = chart_indicators(bars)
+    snapshot = indicators(bars)
+    assert lines["SMA"][0]["time"] == bars[4].time
+    assert lines["SMA"][-1]["value"] == snapshot["sma"]
+    assert lines["VWAP"][-1]["value"] == snapshot["vwap"]
+    assert lines["Bollinger superior"][-1]["value"] == snapshot["bollinger"][1]

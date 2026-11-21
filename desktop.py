@@ -118,6 +118,8 @@ def show_dashboard(gui, directory, runtime, token, smoke_test, events):
                 QMessageBox.warning(window, "Copia local", "No se pudo crear la copia.")
 
     menu.addAction("Crear copia de la base de datos", lambda: backup())
+    menu.addAction("Consultar actualizaciones", lambda: QDesktopServices.openUrl(QUrl(
+        "https://github.com/waqetdf/market-intelligence-ai/actions/workflows/desktop.yml")))
     menu.addAction("Salir", gui.quit)
     if not smoke_test:
         if sys.platform == "win32" or sys.platform.startswith("linux"):

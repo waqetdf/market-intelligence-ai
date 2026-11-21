@@ -8,17 +8,11 @@ from pydantic import BaseModel, Field
 
 from backend.market import INTERVALS
 
-from backend.technical import analyze
+from backend.technical import analyze, indicator_parameters, STRUCTURE_DEFAULTS
 
 
 CONTEXT_FRAMES = dict(zip(INTERVALS, ("15m", "1h", "4h", "4h", "4h", "1d", "1w", None)))
 STRATEGY_VERSION = 1
-DETECTOR_SETTINGS = (
-    "MARKET_SWING_RADIUS", "MARKET_EQUAL_TOLERANCE",
-    "MARKET_MSS_RANGE_MULTIPLE", "MARKET_BLOCK_LOOKBACK",
-)
-
-
 class Strategy(BaseModel):
     window: int = Field(ge=1, le=50)
     volume_min: float = Field(ge=0, le=20, allow_inf_nan=False)
@@ -35,7 +29,8 @@ def default_strategy():
 
 def strategy_signature(rules):
     return {"version": STRATEGY_VERSION, "rules": rules.model_dump(),
-            "detectors": {key: os.getenv(key) for key in DETECTOR_SETTINGS}}
+            "detectors": {key: os.getenv(key, str(default)) for key, default in STRUCTURE_DEFAULTS.items()},
+            "indicators": indicator_parameters()}
 
 
 def assess_quality(report, as_of, signature):
@@ -61,7 +56,7 @@ def opportunity(bars, context, current, frames=None, rules=None, interval="15m")
     volume_min = rules.volume_min
     result = {"direction": "sin señal", "evidence": [], "risks": [], "invalidation": None,
               "target": None, "reward_risk": None}
-    if len(bars) < 35 or context is None or not context["indicators"]:
+    if len(bars) < 35 or context is None or not context["indicators"] or not current["indicators"]:
         result["risks"].append("Histórico o contexto insuficiente")
         return result
     trend = current["trend"]
@@ -144,7 +139,6 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5, interval="15m", rules=None,
             continue
         if history[-1].close_time - context[-1].close_time >= freshness:
             continue
-        eligible.append(i)
         if end != previous_context:
             context_report = analyze(context)
             previous_context = end
@@ -152,13 +146,16 @@ def replay(bars, higher, fee_bps=10, slippage_bps=5, interval="15m", rules=None,
         if rules.require_fvg:
             lower_end = bisect_right(lower_ends, history[-1].close_time)
             if not lower_end or history[-1].close_time - lower_ends[lower_end - 1] >= 600:
-                eligible.pop()
                 continue
             if lower_end != previous_lower:
                 lower_report = analyze(lower[max(0, lower_end - 150):lower_end])
                 previous_lower = lower_end
             frames["5m"] = lower_report
-        signal = opportunity(history, context_report, analyze(history), frames, rules=rules, interval=interval)
+        current = analyze(history)
+        if not current["indicators"] or not context_report["indicators"]:
+            continue
+        eligible.append(i)
+        signal = opportunity(history, context_report, current, frames, rules=rules, interval=interval)
         price_move = bars[i].close / bars[i].open - 1
         label = (price_move > costs) - (price_move < -costs)
         key = (signal.get("trigger_time"), signal["direction"])

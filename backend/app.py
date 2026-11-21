@@ -28,7 +28,7 @@ from backend.local_integrations import INTEGRATION_KEYS, save_local_integrations
 from backend.market import Asset, INTERVALS, get_candles
 from backend.news import commentary, feed_urls, fetch_news, relevant_news
 from backend.signals import CONTEXT_FRAMES, Strategy, assess_quality, default_strategy, opportunity, replay, strategy_signature
-from backend.technical import analyze
+from backend.technical import analyze, chart_indicators
 
 logging.basicConfig(level=logging.INFO)
 # Outbound request URLs may carry webhook or bot credentials.
@@ -404,7 +404,7 @@ async def chart(symbol: str, interval: str = "15m"):
         raise HTTPException(422, "Temporalidad no admitida")
     asset = lookup(symbol)
     bars = await candles(asset, interval)
-    return {"bars": bars, "technical": analyze(bars), "source": asset.source}
+    return {"bars": bars, "technical": analyze(bars), "lines": chart_indicators(bars), "source": asset.source}
 
 
 @api.get("/alerts")
@@ -493,8 +493,16 @@ def calendar():
 
 
 @api.get("/news")
-async def news():
-    return {**news_report, "checked_at": news_checked or None}
+async def news(symbol: str | None = None):
+    report = {**news_report, "checked_at": news_checked or None}
+    if symbol:
+        asset = lookup(symbol)
+        try:
+            bars = await candles(asset, "15m")
+        except HTTPException:
+            bars = []
+        report["items"] = relevant_news(report["items"], asset, bars, int(time()))
+    return report
 
 
 @api.get("/settings")

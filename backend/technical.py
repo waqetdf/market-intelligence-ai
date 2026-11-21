@@ -5,6 +5,17 @@ from statistics import fmean, pstdev
 
 from backend.market import Candle
 
+INDICATOR_DEFAULTS = {
+    "MARKET_RSI_PERIOD": 14, "MARKET_ATR_PERIOD": 14, "MARKET_MA_PERIOD": 20,
+    "MARKET_VOLUME_PERIOD": 20, "MARKET_MACD_FAST": 12, "MARKET_MACD_SLOW": 26,
+    "MARKET_MACD_SIGNAL": 9, "MARKET_BOLLINGER_WIDTH": 2,
+}
+STRUCTURE_DEFAULTS = {
+    "MARKET_SWING_RADIUS": 2, "MARKET_EQUAL_TOLERANCE": 0.001, "MARKET_MSS_RANGE_MULTIPLE": 1,
+    "MARKET_BLOCK_LOOKBACK": 10, "MARKET_FALSE_BREAKOUT_BARS": 3, "MARKET_MSS_LOOKBACK": 14,
+    "MARKET_MIN_FVG_RELATIVE": 0,
+}
+
 
 def ema_series(values, period):
     series = [values[0]]
@@ -19,6 +30,9 @@ def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | Non
     tolerance = tolerance if tolerance is not None else max(0, float(os.getenv("MARKET_EQUAL_TOLERANCE", "0.001")))
     mss_multiple = max(0, float(os.getenv("MARKET_MSS_RANGE_MULTIPLE", "1")))
     block_lookback = max(1, int(os.getenv("MARKET_BLOCK_LOOKBACK", "10")))
+    false_window = max(1, int(os.getenv("MARKET_FALSE_BREAKOUT_BARS", "3")))
+    mss_lookback = max(1, int(os.getenv("MARKET_MSS_LOOKBACK", "14")))
+    gap_threshold = max(0, float(os.getenv("MARKET_MIN_FVG_RELATIVE", "0")))
     if swing < 1 or tolerance < 0:
         raise ValueError("Invalid detector parameters")
     events = []
@@ -33,7 +47,7 @@ def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | Non
             events.append(dict(kind=kind, side=side, level=level, time=bar.time, confirmed_at=bar.close_time, state="confirmado", **details))
 
         for side, (level, opened) in list(breaks.items()):
-            if i - opened > 3:
+            if i - opened > false_window:
                 del breaks[side]
             elif (bar.close <= level if side == "alcista" else bar.close >= level):
                 event("False Breakout", "bajista" if side == "alcista" else "alcista",
@@ -82,7 +96,7 @@ def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | Non
             if sign * (bar.close - level) > 0:
                 kind = "BOS" if trend in ("lateral", side) else "CHoCH"
                 if kind == "CHoCH" and i > 1 and abs(bar.close - bar.open) > mss_multiple * fmean(
-                    item.high - item.low for item in bars[max(0, i - 14):i]
+                    item.high - item.low for item in bars[max(0, i - mss_lookback):i]
                 ):
                     event("MSS", side, level)
                 event(kind, side, level)
@@ -109,11 +123,11 @@ def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | Non
                 gap["state"] = "mitigado"
         if i >= 2:
             previous = bars[i - 2]
-            if bar.low > previous.high:
+            if bar.low - previous.high > abs(previous.high) * gap_threshold:
                 gaps.append(dict(side="alcista", low=previous.high, high=bar.low,
                                  state="abierto", time=bar.time))
                 event("FVG", "alcista", previous.high, high=bar.low)
-            elif bar.high < previous.low:
+            elif previous.low - bar.high > abs(previous.low) * gap_threshold:
                 gaps.append(dict(side="bajista", low=bar.high, high=previous.low,
                                  state="abierto", time=bar.time))
                 event("FVG", "bajista", bar.high, high=previous.low)
@@ -137,23 +151,62 @@ def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | Non
                 indicators=indicators(bars))
 
 
+def indicator_parameters():
+    periods = {key: max(1, min(149, int(os.getenv(key, str(default)))))
+               for key, default in INDICATOR_DEFAULTS.items() if key != "MARKET_BOLLINGER_WIDTH"}
+    periods["MARKET_BOLLINGER_WIDTH"] = max(0, min(10, float(os.getenv("MARKET_BOLLINGER_WIDTH", "2"))))
+    if periods["MARKET_MACD_FAST"] >= periods["MARKET_MACD_SLOW"]:
+        raise ValueError("MACD rápido debe ser inferior al lento")
+    return periods
+
+
 def indicators(bars):
-    if len(bars) < 35:
+    config = indicator_parameters()
+    rsi_period, atr_period = config["MARKET_RSI_PERIOD"], config["MARKET_ATR_PERIOD"]
+    ma_period, volume_period = config["MARKET_MA_PERIOD"], config["MARKET_VOLUME_PERIOD"]
+    fast, slow, signal = config["MARKET_MACD_FAST"], config["MARKET_MACD_SLOW"], config["MARKET_MACD_SIGNAL"]
+    warmup = max(35, rsi_period + 1, atr_period + 1, ma_period, volume_period + 1, slow + signal - 1)
+    if len(bars) < warmup:
         return {}
     closes = [bar.close for bar in bars]
-    changes = [right - left for left, right in zip(closes, closes[1:])][-14:]
+    changes = [right - left for left, right in zip(closes, closes[1:])][-rsi_period:]
     gains = sum(max(change, 0) for change in changes)
     losses = sum(max(-change, 0) for change in changes)
-    center = fmean(closes[-20:])
-    width = 2 * pstdev(closes[-20:])
+    center = fmean(closes[-ma_period:])
+    width = config["MARKET_BOLLINGER_WIDTH"] * pstdev(closes[-ma_period:])
     volume = sum(bar.volume for bar in bars)
-    macd_series = [fast - slow for fast, slow in zip(ema_series(closes, 12), ema_series(closes, 26))][25:]
+    macd_series = [first - second for first, second in zip(ema_series(closes, fast), ema_series(closes, slow))][slow-1:]
     return dict(
-        sma=center, ema=ema_series(closes, 20)[-1], macd=macd_series[-1], macd_signal=ema_series(macd_series, 9)[-1],
+        sma=center, ema=ema_series(closes, ma_period)[-1], macd=macd_series[-1], macd_signal=ema_series(macd_series, signal)[-1],
         rsi=100 * gains / (gains + losses) if gains + losses else 50,
         atr=fmean(max(bar.high - bar.low, abs(bar.high - before.close), abs(bar.low - before.close))
-                  for before, bar in zip(bars[-15:-1], bars[-14:])),
+                  for before, bar in zip(bars[-atr_period-1:-1], bars[-atr_period:])),
         bollinger=[center - width, center + width], volume=bars[-1].volume,
-        relative_volume=bars[-1].volume / baseline if (baseline := fmean(bar.volume for bar in bars[-21:-1])) else None,
+        relative_volume=bars[-1].volume / baseline if (baseline := fmean(bar.volume for bar in bars[-volume_period-1:-1])) else None,
         vwap=sum((bar.high + bar.low + bar.close) / 3 * bar.volume for bar in bars) / volume if volume else None,
     )
+
+
+def chart_indicators(bars):
+    lines = {name: [] for name in ("EMA", "SMA", "VWAP", "Bollinger superior", "Bollinger inferior")}
+    if not bars:
+        return lines
+    config = indicator_parameters()
+    period = config["MARKET_MA_PERIOD"]
+    closes = [bar.close for bar in bars]
+    averages = ema_series(closes, period)
+    value = volume = 0.0
+    for index, bar in enumerate(bars):
+        lines["EMA"].append({"time": bar.time, "value": averages[index]})
+        value += (bar.high + bar.low + bar.close) / 3 * bar.volume
+        volume += bar.volume
+        if volume:
+            lines["VWAP"].append({"time": bar.time, "value": value / volume})
+        if index + 1 >= period:
+            window = closes[index + 1 - period:index + 1]
+            center = fmean(window)
+            width = config["MARKET_BOLLINGER_WIDTH"] * pstdev(window)
+            for name, level in (("SMA", center), ("Bollinger superior", center + width),
+                                ("Bollinger inferior", center - width)):
+                lines[name].append({"time": bar.time, "value": level})
+    return lines

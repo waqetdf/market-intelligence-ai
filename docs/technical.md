@@ -119,3 +119,13 @@ primera vela posterior de cada alerta. Usa apertura y cierre de esa vela,
 con 10 pb de comisión y 5 pb de deslizamiento por lado. Si falta esa vela,
 la alerta no se puntúa. La vista calcula resultados sobre las últimas 100
 evaluaciones disponibles.
+
+Los períodos RSI, ATR, EMA/SMA, volumen de referencia y MACD, y el ancho
+de Bollinger se pueden ajustar con las variables de [.env.example](../.env.example).
+La ventana de falsa ruptura, la referencia del desplazamiento MSS y la
+amplitud mínima relativa del FVG también son configurables. El ancho mínimo
+compara la separación entre las dos sombras externas con el valor
+absoluto del borde de la primera vela. Los períodos deben dejar un tramo
+evaluable dentro de las 150 velas de la estrategia. Las líneas EMA, SMA,
+VWAP acumulado y Bollinger del gráfico se construyen con prefijos
+cronológicos y pueden activarse individualmente.

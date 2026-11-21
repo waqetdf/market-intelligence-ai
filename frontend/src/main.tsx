@@ -1,18 +1,21 @@
 import {useEffect, useRef, useState, type FormEvent} from 'react'
 import {createRoot} from 'react-dom/client'
-import {CandlestickSeries, ColorType, createChart, type UTCTimestamp} from 'lightweight-charts'
+import {CandlestickSeries, ColorType, createChart, LineSeries, type LogicalRange, type UTCTimestamp} from 'lightweight-charts'
 import './style.css'
 
 type Asset = {symbol:string; source:string; ticker:string; enabled:boolean}
 type Bar = {time:UTCTimestamp; open:number; high:number; low:number; close:number}
-type Event = {kind:string; side:string; level:number; time:number}
-type Result = {bars:Bar[]; source:string; technical:{trend:string; events:Event[]; indicators:Record<string, number | number[] | null>}}
+type Event = {kind:string; side:string; level:number; time:number; high?:number}
+type Result = {bars:Bar[]; source:string; lines:Record<string,{time:UTCTimestamp; value:number}[]>;
+  technical:{trend:string; events:Event[]; provisional:Event[]; support:number|null; resistance:number|null;
+    premium:number[]|null; discount:number[]|null; indicators:Record<string, number | number[] | null>}}
 type Simulation = Record<string,unknown> & {id:string; created_at:number; timeframe:string}
 type Forward = {count:number; expectancy:number|null; positive:number;
   items:{observed_at:number; resolved_at:number; direction:string; net_return:number}[]}
 type Release = {title:string; starts_at:number; source:string; url:string}
 type Strategy = {window:number; volume_min:number; require_sweep:boolean; require_fvg:boolean; max_stop_atr:number; macro_pause_minutes:number}
-type News = {title:string; url:string; source:string; published:string|null}
+type News = {title:string; url:string; source:string; published:string|null; sentiment?:string;
+  claim?:string; event?:string|null; price_comparison?:{return:number}|null}
 type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[];
   quality?:{status:string; sample?:number}; interest_zone?:number[]; calendar?:Release[];
   risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
@@ -49,8 +52,12 @@ async function api<T>(path:string, init?:RequestInit):Promise<T> {
   return response.json()
 }
 
-function Chart({result, overlays, levels}:{result:Result; overlays:boolean; levels:boolean}) {
+const lineColors:Record<string,string> = {'EMA':'#91a4f5','SMA':'#f0c47a','VWAP':'#da9fe0',
+  'Bollinger superior':'#7faebe','Bollinger inferior':'#7faebe'}
+
+function Chart({result, overlays, lines}:{result:Result; overlays:boolean; lines:string[]}) {
   const element = useRef<HTMLDivElement>(null)
+  const previousRange = useRef<LogicalRange|null>(null)
   useEffect(() => {
     if (!element.current) return
     const chart = createChart(element.current, {autoSize:true, height:420,
@@ -60,20 +67,22 @@ function Chart({result, overlays, levels}:{result:Result; overlays:boolean; leve
     const series = chart.addSeries(CandlestickSeries,{upColor:'#4bd7a4',downColor:'#fa8191',borderVisible:false,wickUpColor:'#4bd7a4',wickDownColor:'#fa8191'})
     series.setData(result.bars)
     if (overlays) {
-      result.technical.events.filter(event => ['BOS','CHoCH','FVG','IFVG','MSS','Liquidity Sweep','Order Block','Breaker Block'].includes(event.kind)).slice(-8).forEach(event =>
-        series.createPriceLine({price:event.level,color:event.side === 'alcista' ? '#67bfab' : '#f190a2',title:event.kind,lineWidth:1}))
+      result.technical.events.filter(event=>['BOS','CHoCH','FVG','IFVG','MSS','Liquidity Sweep',
+        'Order Block','Breaker Block','Mitigation Block','False Breakout'].includes(event.kind)).slice(-8).forEach(event=>{
+        const color = event.side === 'alcista' ? '#67bfab' : '#f190a2'
+        series.createPriceLine({price:event.level,color,title:event.kind,lineWidth:1})
+        if (event.high != null) series.createPriceLine({price:event.high,color,lineWidth:1,axisLabelVisible:false})
+      })
     }
-    if (levels) {
-      for (const key of ['ema', 'sma', 'vwap', 'bollinger']) {
-        const value = result.technical.indicators[key]
-        for (const price of Array.isArray(value) ? value : [value]) {
-          if (typeof price === 'number') series.createPriceLine({price, color:'#91a4f5', title:key.toUpperCase(), lineWidth:1})
-        }
-      }
+    for (const name of lines) {
+      const line = chart.addSeries(LineSeries,{color:lineColors[name],lineWidth:1,title:name,priceLineVisible:false})
+      line.setData(result.lines[name] ?? [])
     }
-    chart.timeScale().fitContent()
-    return () => chart.remove()
-  }, [result, overlays, levels])
+    const scale = chart.timeScale()
+    if (previousRange.current) scale.setVisibleLogicalRange(previousRange.current)
+    else scale.fitContent()
+    return () => {previousRange.current=scale.getVisibleLogicalRange(); chart.remove()}
+  }, [result, overlays, lines])
   return <div ref={element}/>
 }
 
@@ -89,7 +98,7 @@ function App() {
   const [result,setResult] = useState<Result>()
   const [alerts,setAlerts] = useState<Alert[]>([])
   const [overlays,setOverlays] = useState(true)
-  const [levels,setLevels] = useState(false)
+  const [lines,setLines] = useState<string[]>([])
   const [forward,setForward] = useState<Forward>()
   const [history,setHistory] = useState<Alert[]>([])
   const [settings,setSettings] = useState<Settings>()
@@ -105,6 +114,8 @@ function App() {
   const [simulation,setSimulation] = useState<Simulation>()
   const [loading,setLoading] = useState(false)
   const [news,setNews] = useState<News[]>([])
+  const [assetNews,setAssetNews] = useState<News[]>([])
+  const [onlyAssetNews,setOnlyAssetNews] = useState(false)
   const [context,setContext] = useState('')
   const [references,setReferences] = useState<News[]>([])
   const [sources,setSources] = useState<Record<string,{status:string}>>({})
@@ -134,6 +145,7 @@ function App() {
     setSimulationError('')
     setContext('')
     setReferences([])
+    setAssetNews([])
     if (!symbol) return
     const controller = new AbortController()
     api<Simulation[]>('/simulations?'+new URLSearchParams({symbol}), {signal:controller.signal})
@@ -141,6 +153,8 @@ function App() {
     setLoading(true)
     setError('')
     const refresh = () => {
+      if (onlyAssetNews) void api<{items:News[]}>('/news?'+new URLSearchParams({symbol}),
+        {signal:controller.signal}).then(report=>setAssetNews(report.items)).catch(()=>{})
       void api<Alert[]>('/history?'+new URLSearchParams({symbol}),{signal:controller.signal}).then(setHistory).catch(()=>{})
       void api<Forward>('/forward?'+new URLSearchParams({symbol}),{signal:controller.signal}).then(setForward).catch(()=>{})
       return api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
@@ -150,7 +164,7 @@ function App() {
     void refresh()
     const timer = setIntervalGlobal(refresh)
     return () => {controller.abort(); window.clearInterval(timer)}
-  }, [symbol,interval])
+  }, [symbol,interval,onlyAssetNews])
   async function add(event:FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -254,10 +268,20 @@ function App() {
         <div className="controls">
           <select aria-label="Activo" value={symbol} onChange={e=>setSymbol(e.target.value)}>{!assets.length && <option value="">Sin activos</option>}{assets.map(a=><option key={a.symbol}>{a.symbol}</option>)}</select>
           <select aria-label="Temporalidad" value={interval} onChange={e=>setInterval(e.target.value)}>{timeframes.map(i=><option key={i}>{i}</option>)}</select>
-          <label><input type="checkbox" checked={levels} onChange={e=>setLevels(e.target.checked)}/> Niveles de indicadores</label>
+          <details><summary>Indicadores</summary>{Object.keys(lineColors).map(name=><label key={name}>
+            <input type="checkbox" checked={lines.includes(name)} onChange={event=>{
+              const checked = event.target.checked
+              setLines(current=>checked ? [...current,name] : current.filter(item=>item!==name))
+            }}/>{name}
+          </label>)}</details>
           <label><input type="checkbox" checked={overlays} onChange={e=>setOverlays(e.target.checked)}/> Patrones</label>
         </div>
-        {error ? <p role="alert">{error}</p> : loading ? <p>Cargando velas cerradas…</p> : result?.bars.length ? <><Chart result={result} overlays={overlays} levels={levels}/><p>{result.source} · Tendencia {result.technical.trend} · Último cierre {result.bars.at(-1)?.close}</p><dl>{Object.entries(result.technical.indicators).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.map(v=>v.toFixed(2)).join(' – ') : value?.toFixed(2) ?? '—'}</dd></div>)}</dl></> : <p>{symbol ? 'Sin velas cerradas disponibles' : 'Añade un activo para ver sus velas'}</p>}
+        {error ? <p role="alert">{error}</p> : loading ? <p>Cargando velas cerradas…</p> : result?.bars.length ? <><Chart key={symbol+interval} result={result} overlays={overlays} lines={lines}/><p>{result.source} · Tendencia {result.technical.trend} · Último cierre {result.bars.at(-1)?.close}</p><dl>{Object.entries(result.technical.indicators).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.map(v=>v.toFixed(2)).join(' – ') : value?.toFixed(2) ?? '—'}</dd></div>)}</dl></> : <p>{symbol ? 'Sin velas cerradas disponibles' : 'Añade un activo para ver sus velas'}</p>}
+        {!!result?.bars.length && <details><summary>Niveles estructurales y patrones provisionales</summary>
+          <p>Soporte / SSL · {result.technical.support ?? '—'} · Resistencia / BSL · {result.technical.resistance ?? '—'}</p>
+          <p>Premium · {result.technical.premium?.join(' – ') ?? '—'} · Discount · {result.technical.discount?.join(' – ') ?? '—'}</p>
+          {result.technical.provisional.map(event=><p key={event.kind+event.time}>{event.kind} provisional · {event.level}</p>)}
+        </details>}
       </article>
       <aside className="panel">
         <h2>Resumen del mercado</h2>
@@ -308,7 +332,14 @@ function App() {
       </article>
     </section>
     <section className="workspace">
-      <article className="panel"><h2>Noticias</h2>{news.length ? news.slice(0,12).map(n=><p key={n.url}><a href={n.url} target="_blank" rel="noreferrer">{n.title}</a><br/>{n.source} {n.published}</p>) : <p>Sin titulares disponibles</p>}
+      <article className="panel"><h2>Noticias</h2>
+      <label><input type="checkbox" checked={onlyAssetNews} disabled={!symbol} onChange={e=>setOnlyAssetNews(e.target.checked)}/> Solo noticias relevantes para el activo</label>
+      {(onlyAssetNews ? assetNews : news).slice(0,12).map(n=><p key={n.url}>
+        <a href={n.url} target="_blank" rel="noreferrer">{n.title}</a><br/>{n.source} {n.published}
+        {n.sentiment && <><br/>Sentimiento {n.sentiment} · {n.claim}{n.event && ' · '+n.event}</>}
+        {n.price_comparison && <><br/>Cambio observado entre cierres {(n.price_comparison.return * 100).toFixed(2)} %</>}
+      </p>)}
+      {!(onlyAssetNews ? assetNews : news).length && <p>Sin titulares disponibles</p>}
       <button disabled={!symbol} onClick={()=>api<{text:string|null; error?:string; references?:News[]}>('/context?'+new URLSearchParams({symbol})).then(value=>{setContext(value.text ?? value.error ?? 'IA desactivada'); setReferences(value.references ?? [])}).catch(e=>setContext(e.message))}>Consultar contexto</button>{context && <p>{context}</p>}
       {references.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}</article>
       <aside className="panel"><h2>Motor de análisis</h2>
