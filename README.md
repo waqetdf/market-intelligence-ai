@@ -104,3 +104,8 @@ permanecen en el servidor y no se devuelven al navegador.
 Usa URLs RSS públicas sin credenciales en la lista de fuentes. Los tokens
 de Telegram y Discord se guardan en sus variables dedicadas. Las solicitudes
 HTTP salientes no registran sus URLs en el log habitual.
+
+Con IA habilitada, una alerta nueva con titulares relevantes puede incorporar
+una lectura del modelo. El intento tiene un límite de ocho segundos y no
+cambia el disparador. Define `MARKET_DASHBOARD_URL` con la URL de acceso al
+panel para incluir enlaces con activo y temporalidad en las alertas de MT5.

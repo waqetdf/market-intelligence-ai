@@ -6,6 +6,7 @@ from pathlib import Path
 import secrets
 from time import time
 from typing import Annotated
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -127,6 +128,25 @@ async def candles(asset, interval, limit=300):
     return result
 
 
+def chart_link(asset):
+    if asset.source == "binance":
+        return f"https://www.binance.com/en/trade/{asset.ticker}"
+    base = os.getenv("MARKET_DASHBOARD_URL", "").rstrip("/")
+    if base and urlsplit(base).scheme in ("https", "http"):
+        return base + "/?" + urlencode({"symbol": asset.symbol, "interval": "15m"})
+    return None
+
+
+async def annotate_alert(payload, current):
+    data = {"symbol": payload["symbol"], "source": payload["source"],
+            "price": payload["price"], "observed_at": payload["observed_at"],
+            "trend": current["trend"], "events": payload["patterns"], "news": payload["news"]}
+    try:
+        return await asyncio.wait_for(commentary(data), timeout=8)
+    except TimeoutError:
+        return {"text": None}
+
+
 async def scan_asset(asset):
     frames = await asyncio.gather(*(candles(asset, interval) for interval in INTERVALS),
                                   return_exceptions=True)
@@ -160,7 +180,7 @@ async def scan_asset(asset):
                    observed_at=observed, source=asset.source,
                    trends={interval: report["trend"] for interval, report in snapshots.items()},
                    mode="observación en tiempo real",
-                   chart=f"https://www.binance.com/en/trade/{asset.ticker}" if asset.source == "binance" else None)
+                   chart=chart_link(asset))
     deliver = False
     try:
         with engine.begin() as connection:
@@ -177,7 +197,16 @@ async def scan_asset(asset):
     except IntegrityError:
         return
     if deliver:
-        await notify(payload, enabled_integrations())
+        enabled = enabled_integrations()
+        if enabled["ai"] and items:
+            assessment = await annotate_alert(payload, current)
+            if assessment.get("text"):
+                payload["assessment"] = assessment
+                with engine.begin() as connection:
+                    connection.execute(alerts.update().where(alerts.c.key == key).values(payload=payload))
+                    connection.execute(decisions.update().where(decisions.c.symbol == asset.symbol,
+                                       decisions.c.observed_at == observed).values(payload=payload))
+        await notify(payload, enabled)
 
 
 async def monitor():

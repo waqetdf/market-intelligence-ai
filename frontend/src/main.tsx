@@ -11,7 +11,7 @@ type Simulation = Record<string,unknown>
 type News = {title:string; url:string; source:string; published:string|null}
 type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[];
   risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
-  chart?:string|null; news?:News[]; trends?:Record<string,string>}
+  chart?:string|null; news?:News[]; assessment?:{text:string}; trends?:Record<string,string>}
 type Integration = 'ai' | 'discord' | 'telegram'
 type Settings = {feeds:{allowed:string[]; enabled:string[]}; ai:{provider:string; model:string|null};
   configured:Record<Integration,boolean>; integrations:Record<Integration,boolean>}
@@ -26,6 +26,7 @@ function Signal({signal}:{signal:Alert}) {
     {!!signal.risks?.length && <p>{signal.risks.join(' · ')}</p>}
     {signal.invalidation != null && <p>Invalidación {signal.invalidation} · Objetivo {signal.target ?? '—'} · R/B {signal.reward_risk?.toFixed(2) ?? '—'}</p>}
     {signal.chart && <p><a href={signal.chart} target="_blank" rel="noreferrer">Gráfico del proveedor</a></p>}
+    {signal.assessment?.text && <p>{signal.assessment.text}</p>}
     {signal.news?.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}
   </details>
 }
@@ -67,10 +68,14 @@ function Chart({result, overlays, levels}:{result:Result; overlays:boolean; leve
   return <div ref={element}/>
 }
 
+const initialParams = new URLSearchParams(window.location.search)
+const timeframes = ['1m','5m','15m','30m','1h','4h','1d','1w']
+
 function App() {
   const [assets,setAssets] = useState<Asset[]>([])
   const [symbol,setSymbol] = useState('')
-  const [interval,setInterval] = useState('15m')
+  const requestedInterval = initialParams.get('interval') ?? ''
+  const [interval,setInterval] = useState(timeframes.includes(requestedInterval) ? requestedInterval : '15m')
   const [result,setResult] = useState<Result>()
   const [alerts,setAlerts] = useState<Alert[]>([])
   const [overlays,setOverlays] = useState(true)
@@ -90,7 +95,7 @@ function App() {
   const [sources,setSources] = useState<Record<string,{status:string}>>({})
   const [source,setSource] = useState('mt5-csv')
   useEffect(() => {
-    api<Asset[]>('/assets').then(items => {setAssets(items); setSymbol(items[0]?.symbol ?? '')}).catch(e => setError(e.message))
+    api<Asset[]>('/assets').then(items => {setAssets(items); setSymbol(items.find(item=>item.symbol === initialParams.get('symbol'))?.symbol ?? items[0]?.symbol ?? '')}).catch(e => setError(e.message))
     api<Settings>('/settings').then(setSettings).catch(e=>setSettingsError(e.message))
     const refresh = () => {
       void Promise.allSettled([
@@ -168,7 +173,7 @@ function App() {
       <article className="panel">
         <div className="controls">
           <select aria-label="Activo" value={symbol} onChange={e=>setSymbol(e.target.value)}>{!assets.length && <option value="">Sin activos</option>}{assets.map(a=><option key={a.symbol}>{a.symbol}</option>)}</select>
-          <select aria-label="Temporalidad" value={interval} onChange={e=>setInterval(e.target.value)}>{['1m','5m','15m','30m','1h','4h','1d','1w'].map(i=><option key={i}>{i}</option>)}</select>
+          <select aria-label="Temporalidad" value={interval} onChange={e=>setInterval(e.target.value)}>{timeframes.map(i=><option key={i}>{i}</option>)}</select>
           <label><input type="checkbox" checked={levels} onChange={e=>setLevels(e.target.checked)}/> Niveles de indicadores</label>
           <label><input type="checkbox" checked={overlays} onChange={e=>setOverlays(e.target.checked)}/> Patrones</label>
         </div>

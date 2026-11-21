@@ -19,10 +19,13 @@ def format_alert(payload):
              "Calidad: pendiente de calibración",
              *payload["risks"],
              "Aviso informativo. No se ha ejecutado ninguna operación."]
+    if assessment := payload.get("assessment"):
+        lines.append(assessment["text"])
     if payload["chart"]:
         lines.append(payload["chart"])
-    if payload["news"]:
-        lines += [payload["news"][0]["title"], payload["news"][0]["url"]]
+    items = payload.get("assessment", {}).get("references") or payload["news"]
+    if items:
+        lines += [items[0]["title"], items[0]["url"]]
     return "\n".join(lines)
 
 
