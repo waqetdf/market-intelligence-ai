@@ -1,0 +1,9 @@
+services:
+  app:
+    environment:
+      SSL_CERT_FILE: /run/market/certs/ca-bundle.crt
+    volumes:
+      - type: bind
+        source: ${MARKET_RUNTIME_CA_FILE:?Set the path to the trusted host CA bundle}
+        target: /run/market/certs/ca-bundle.crt
+        read_only: true

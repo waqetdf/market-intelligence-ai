@@ -24,3 +24,19 @@
 
    Puedes hacer una copia bajo demanda con `bash infrastructure/scripts/backup.sh`. Conserva copias cifradas fuera del equipo y comprueba su restauración en una base de datos aislada. El volcado contiene activos, decisiones, alertas y ajustes. Guarda por separado los CSV y `.env`.
 7. Actualiza desde la rama que sigue GitHub con `bash infrastructure/scripts/update.sh`. El script exige que los archivos versionados estén limpios, genera primero una copia y aplica solo cambios fast-forward.
+
+### Redes con una CA privada
+
+Si el servidor inspecciona TLS con una CA corporativa, añade a su almacén
+la CA aprobada y usa el conjunto completo de certificados como volumen de
+solo lectura para el contenedor. En Ubuntu, después de configurarlo con
+`update-ca-certificates`, añade a `.env`:
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml:compose.tls.yml
+MARKET_RUNTIME_CA_FILE=/etc/ssl/certs/ca-certificates.crt
+```
+
+Esto configura HTTPX en tiempo de ejecución. Si la red también intercepta
+la descarga de dependencias durante la compilación, usa el secreto
+BuildKit `build_ca` descrito en el README.
