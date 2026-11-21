@@ -36,3 +36,10 @@ comisiones y deslizamiento de ida y vuelta y no utiliza objetivos ni niveles
 de invalidación para simular la salida. Las métricas son descriptivas del
 histórico cargado. Todavía falta evaluación fuera de muestra, walk-forward
 y calibración de confianza.
+
+Para detectar un Order Block se toma el rango de la última vela contraria
+entre las diez anteriores a un BOS o CHoCH. El primer solapamiento posterior
+marca Mitigation Block. Un cierre por el lado opuesto del rango lo invalida
+y marca Breaker Block. Son definiciones operativas de esta implementación.
+La liquidez compradora y vendedora se representa mediante el último swing
+alto y bajo confirmado.

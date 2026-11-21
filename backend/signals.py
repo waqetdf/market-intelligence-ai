@@ -6,7 +6,7 @@ from backend.technical import analyze
 def opportunity(bars, context, current):
     result = {"direction": "sin señal", "evidence": [], "risks": [], "invalidation": None,
               "target": None, "reward_risk": None}
-    if len(bars) < 35 or context is None:
+    if len(bars) < 35 or context is None or not context["indicators"]:
         result["risks"].append("Histórico o contexto insuficiente")
         return result
     trend = current["trend"]
@@ -30,7 +30,7 @@ def opportunity(bars, context, current):
               if event["kind"] == ("Swing High" if bullish else "Swing Low")
               and (event["level"] > price if bullish else event["level"] < price)]
     target = (min(levels) if bullish else max(levels)) if levels else None
-    result.update(direction="posible compra" if bullish else "posible venta",
+    result.update(trigger_time=structure[-1]["time"], direction="posible compra" if bullish else "posible venta",
                   evidence=[structure[-1]["kind"], "Tendencia superior alineada", "Volumen relativo ≥ 1"],
                   invalidation=stop, target=target,
                   reward_risk=abs(target - price) / abs(price - stop) if target is not None else None)

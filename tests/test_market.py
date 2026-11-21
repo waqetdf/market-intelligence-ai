@@ -18,3 +18,17 @@ def test_confirmed_swing_is_causal():
     events = analyze(bars)["events"]
     assert next(e for e in events if e["kind"] == "Swing High")["time"] == 4
     assert next(e for e in events if e["kind"] == "BOS")["time"] == 5
+
+
+def test_order_block_updates_only_after_breakout():
+    bars = [candle(i, value - 1, value) for i, value in enumerate([3, 4, 8, 4, 3, 10])]
+    bars[4] = bars[4].model_copy(update={"open": 3, "close": 2})
+    first = analyze(bars)
+    assert first["blocks"][0]["state"] == "abierto"
+    assert first["blocks"][0]["origin"] == 4
+    touched = analyze([*bars, candle(6, 2.5, 4)])
+    assert touched["blocks"][0]["state"] == "mitigado"
+    assert touched["events"][-1]["time"] == 6
+    invalid = analyze([*bars, candle(6, 1, 1.5)])
+    assert invalid["blocks"][0]["state"] == "invalidado"
+    assert any(event["kind"] == "Breaker Block" for event in invalid["events"])

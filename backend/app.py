@@ -8,6 +8,7 @@ from time import time
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 import httpx
@@ -88,11 +89,11 @@ async def monitor():
             outcome = opportunity(low, analyze(context) if context else None, current)
             if outcome["direction"] == "sin señal":
                 continue
-            origin = next(event["time"] for event in reversed(current["events"])
-                          if event["kind"] in ("BOS", "CHoCH"))
+            origin = outcome["trigger_time"]
             key = f"{asset.symbol}:{origin}:{outcome['direction']}"
             payload = dict(outcome, symbol=asset.symbol, timeframe="15m", price=low[-1].close,
-                           observed_at=low[-1].close_time, source=asset.source)
+                           observed_at=low[-1].close_time, source=asset.source,
+                           chart=f"https://www.binance.com/en/trade/{asset.ticker}" if asset.source == "binance" else None)
             try:
                 with engine.begin() as connection:
                     connection.execute(alerts.insert().values(key=key, payload=payload))
@@ -194,4 +195,8 @@ async def context(symbol: str):
 
 distribution = Path("frontend/dist")
 if distribution.is_dir():
+    @app.get("/", dependencies=[Depends(authorized)])
+    def dashboard():
+        return FileResponse(distribution / "index.html")
+
     app.mount("/", StaticFiles(directory=distribution, html=True))

@@ -17,10 +17,25 @@ def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
     highs, lows = [], []
     broken = set()
     gaps = []
+    blocks = []
     trend = "lateral"
     for i, bar in enumerate(bars):
         def event(kind, side, level, **details):
             events.append(dict(kind=kind, side=side, level=level, time=bar.time, **details))
+
+        for block in blocks:
+            if block["state"] == "invalidado":
+                continue
+            bullish = block["side"] == "alcista"
+            invalid = bar.close < block["low"] if bullish else bar.close > block["high"]
+            if invalid:
+                block["state"] = "invalidado"
+                event("Breaker Block", "bajista" if bullish else "alcista",
+                      block["low"], high=block["high"], origin=block["origin"])
+            elif block["state"] == "abierto" and bar.low <= block["high"] and bar.high >= block["low"]:
+                block["state"] = "mitigado"
+                event("Mitigation Block", block["side"], block["low"],
+                      high=block["high"], origin=block["origin"])
 
         pivot = i - swing
         if pivot >= swing:
@@ -54,6 +69,13 @@ def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
                 ):
                     event("MSS", side, level)
                 event(kind, side, level)
+                opposing = next((item for item in reversed(bars[max(0, i - 10):i])
+                                 if sign * (item.close - item.open) < 0), None)
+                if opposing:
+                    block = dict(side=side, low=opposing.low, high=opposing.high,
+                                 state="abierto", time=bar.time, origin=opposing.time)
+                    blocks.append(block)
+                    event("Order Block", side, opposing.low, high=opposing.high, origin=opposing.time)
                 broken.add(key)
                 trend = side
             else:
@@ -81,7 +103,9 @@ def analyze(bars: list[Candle], swing: int = 2, tolerance: float = 0.001):
     resistance = highs[-1][1] if highs else None
     return dict(trend=trend, support=support, resistance=resistance,
                 equilibrium=(support + resistance) / 2 if support is not None and resistance is not None else None,
-                events=events, gaps=gaps, indicators=indicators(bars))
+                events=events, gaps=gaps, blocks=blocks,
+                buy_side_liquidity=resistance, sell_side_liquidity=support,
+                indicators=indicators(bars))
 
 
 def indicators(bars):
