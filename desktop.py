@@ -97,7 +97,7 @@ def main():
     gui = QApplication([])
     gui.setApplicationName("Market Intelligence AI")
     gui.setOrganizationName("Market Intelligence AI")
-    temporary = TemporaryDirectory(prefix="market-desktop-") if smoke_test else None
+    temporary = TemporaryDirectory(prefix="market-desktop-", ignore_cleanup_errors=True) if smoke_test else None
     directory = Path(temporary.name if temporary else QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.AppLocalDataLocation))
     lock = QLockFile(str(directory / "desktop.lock"))
@@ -121,11 +121,14 @@ def main():
         logging.basicConfig(level=logging.INFO, handlers=[
             RotatingFileHandler(directory / "desktop.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
         ])
-        from backend.app import app
+        from backend.app import app, engine
 
         token = secrets.token_hex(32).encode("ascii")
-        with DesktopRuntime(app, token) as runtime:
-            return show_dashboard(gui, directory, runtime, token, smoke_test)
+        try:
+            with DesktopRuntime(app, token) as runtime:
+                return show_dashboard(gui, directory, runtime, token, smoke_test)
+        finally:
+            engine.dispose()
     except (OSError, RuntimeError) as exc:
         if not smoke_test:
             QMessageBox.critical(None, "Market Intelligence AI", str(exc))
