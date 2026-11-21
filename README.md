@@ -90,3 +90,9 @@ con referencias a titulares ya recogidos. El servidor valida los índices
 y construye la explicación con textos controlados y las fuentes originales.
 Una respuesta inválida o una caída del modelo deja disponible todo el
 análisis determinista.
+
+La [guía de Ubuntu](docs/ubuntu.md) desarrolla el acceso HTTPS por LAN,
+la conexión con Ollama en el host y la activación de copias diarias con
+systemd. Una instalación nueva incluye los RSS oficiales de la Reserva
+Federal y el BCE. Las demás fuentes requieren un endpoint autorizado
+configurado por el operador.

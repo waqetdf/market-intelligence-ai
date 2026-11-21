@@ -5,4 +5,4 @@ git diff --quiet
 git diff --cached --quiet
 bash infrastructure/scripts/backup.sh
 git pull --ff-only
-docker compose up -d --build --wait
+docker compose up -d --build --wait --wait-timeout 120

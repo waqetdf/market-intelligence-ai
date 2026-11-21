@@ -32,7 +32,7 @@ decisions = Table("decisions", metadata,
                   Column("symbol", String, primary_key=True),
                   Column("observed_at", BigInteger, primary_key=True), Column("payload", JSON))
 settings = Table("settings", metadata, Column("key", String, primary_key=True), Column("payload", JSON))
-engine = create_engine(os.getenv("DATABASE_URL", f"sqlite:///{data / 'market.db'}"))
+engine = create_engine(os.getenv("DATABASE_URL", f"sqlite:///{data / 'market.db'}"), pool_pre_ping=True)
 status = {}
 cache = {}
 provider_slots = asyncio.Semaphore(3)

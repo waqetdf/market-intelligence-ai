@@ -8,4 +8,4 @@ if [[ ! -e .env ]]; then
       -e "s/^MARKET_PASSWORD=$/MARKET_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
 fi
 mkdir -p data/mt5 backups
-docker compose up -d --build --wait
+docker compose up -d --build --wait --wait-timeout 120

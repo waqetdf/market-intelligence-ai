@@ -1,0 +1,10 @@
+[Unit]
+Description=Market Intelligence PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/market-intelligence-ai
+ExecStart=/bin/bash infrastructure/scripts/backup.sh
+UMask=0077
