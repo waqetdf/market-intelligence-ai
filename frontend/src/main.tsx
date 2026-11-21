@@ -9,7 +9,25 @@ type Event = {kind:string; side:string; level:number; time:number}
 type Result = {bars:Bar[]; source:string; technical:{trend:string; events:Event[]; indicators:Record<string, number | number[] | null>}}
 type Simulation = Record<string,unknown>
 type News = {title:string; url:string; source:string; published:string|null}
-type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[]}
+type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[];
+  risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
+  chart?:string|null; news?:News[]; trends?:Record<string,string>}
+type Settings = {feeds:{allowed:string[]; enabled:string[]}; ai:{provider:string; model:string|null};
+  notifications:{discord:boolean; telegram:boolean}}
+type Server = {started_at:number; monitor:{last_cycle?:number; error?:string|null}}
+const dateTime = (timestamp:number) => new Date(timestamp*1000).toLocaleString()
+
+function Signal({signal}:{signal:Alert}) {
+  return <details>
+    <summary>{signal.symbol} · {signal.direction} · {signal.price} · {dateTime(signal.observed_at)}</summary>
+    {!!signal.evidence.length && <p>{signal.evidence.join(' · ')}</p>}
+    {!!signal.trends && <p>{Object.entries(signal.trends).map(([frame, trend])=>frame+' '+trend).join(' · ')}</p>}
+    {!!signal.risks?.length && <p>{signal.risks.join(' · ')}</p>}
+    {signal.invalidation != null && <p>Invalidación {signal.invalidation} · Objetivo {signal.target ?? '—'} · R/B {signal.reward_risk?.toFixed(2) ?? '—'}</p>}
+    {signal.chart && <p><a href={signal.chart} target="_blank" rel="noreferrer">Gráfico del proveedor</a></p>}
+    {signal.news?.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}
+  </details>
+}
 
 async function api<T>(path:string, init?:RequestInit):Promise<T> {
   const response = await fetch('/api'+path, init)
@@ -20,7 +38,7 @@ async function api<T>(path:string, init?:RequestInit):Promise<T> {
   return response.json()
 }
 
-function Chart({result, overlays}:{result:Result; overlays:boolean}) {
+function Chart({result, overlays, levels}:{result:Result; overlays:boolean; levels:boolean}) {
   const element = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!element.current) return
@@ -31,12 +49,20 @@ function Chart({result, overlays}:{result:Result; overlays:boolean}) {
     const series = chart.addSeries(CandlestickSeries,{upColor:'#4bd7a4',downColor:'#fa8191',borderVisible:false,wickUpColor:'#4bd7a4',wickDownColor:'#fa8191'})
     series.setData(result.bars)
     if (overlays) {
-      result.technical.events.filter(event => ['BOS','CHoCH','FVG'].includes(event.kind)).slice(-8).forEach(event =>
+      result.technical.events.filter(event => ['BOS','CHoCH','FVG','IFVG','MSS','Liquidity Sweep','Order Block','Breaker Block'].includes(event.kind)).slice(-8).forEach(event =>
         series.createPriceLine({price:event.level,color:event.side === 'alcista' ? '#67bfab' : '#f190a2',title:event.kind,lineWidth:1}))
+    }
+    if (levels) {
+      for (const key of ['ema', 'sma', 'vwap', 'bollinger']) {
+        const value = result.technical.indicators[key]
+        for (const price of Array.isArray(value) ? value : [value]) {
+          if (typeof price === 'number') series.createPriceLine({price, color:'#91a4f5', title:key.toUpperCase(), lineWidth:1})
+        }
+      }
     }
     chart.timeScale().fitContent()
     return () => chart.remove()
-  }, [result, overlays])
+  }, [result, overlays, levels])
   return <div ref={element}/>
 }
 
@@ -47,6 +73,12 @@ function App() {
   const [result,setResult] = useState<Result>()
   const [alerts,setAlerts] = useState<Alert[]>([])
   const [overlays,setOverlays] = useState(true)
+  const [levels,setLevels] = useState(false)
+  const [history,setHistory] = useState<Alert[]>([])
+  const [settings,setSettings] = useState<Settings>()
+  const [server,setServer] = useState<Server>()
+  const [settingsError,setSettingsError] = useState('')
+  const [simulationError,setSimulationError] = useState('')
   const [error,setError] = useState('')
   const [formError,setFormError] = useState('')
   const [simulation,setSimulation] = useState<Simulation>()
@@ -57,8 +89,16 @@ function App() {
   const [source,setSource] = useState('mt5-csv')
   useEffect(() => {
     api<Asset[]>('/assets').then(items => {setAssets(items); setSymbol(items[0]?.symbol ?? '')}).catch(e => setError(e.message))
-    api<{items:News[]}>('/news').then(data=>setNews(data.items)).catch(e=>setError(e.message))
-    const refresh = () => api<Alert[]>('/alerts').then(setAlerts).catch(() => {})
+    api<Settings>('/settings').then(setSettings).catch(e=>setSettingsError(e.message))
+    const refresh = () => {
+      void Promise.allSettled([
+        api<Alert[]>('/alerts').then(setAlerts),
+        api<Alert[]>('/history').then(setHistory),
+        api<{items:News[]}>('/news').then(data=>setNews(data.items)),
+        api<Server>('/server').then(setServer),
+        api<Record<string,{status:string}>>('/status').then(setSources),
+      ])
+    }
     void refresh()
     const timer = setIntervalGlobal(refresh)
     return () => window.clearInterval(timer)
@@ -66,15 +106,18 @@ function App() {
   useEffect(() => {
     setResult(undefined)
     setSimulation(undefined)
+    setSimulationError('')
     setContext('')
     if (!symbol) return
     const controller = new AbortController()
     setLoading(true)
     setError('')
-    api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
+    const refresh = () => api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
       .then(setResult).catch(e => {if (!controller.signal.aborted) setError(e.message)})
       .finally(() => {if (!controller.signal.aborted) {setLoading(false); api<Record<string,{status:string}>>('/status').then(setSources).catch(()=>{})}})
-    return () => controller.abort()
+    void refresh()
+    const timer = setIntervalGlobal(refresh)
+    return () => {controller.abort(); window.clearInterval(timer)}
   }, [symbol,interval])
   async function add(event:FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -86,6 +129,25 @@ function App() {
       setAssets(items=>[...items,item]); setSymbol(item.symbol)
     } catch(e) {setFormError((e as Error).message)}
   }
+  async function updateFeed(url:string, active:boolean) {
+    if (!settings) return
+    setSettingsError('')
+    const urls = active ? [...settings.feeds.enabled,url] : settings.feeds.enabled.filter(item=>item !== url)
+    try {
+      setSettings(await api<Settings>('/settings/feeds',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({urls})}))
+    } catch(e) {setSettingsError((e as Error).message)}
+  }
+
+  async function runSimulation(event:FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const params = new URLSearchParams({symbol})
+    for (const input of ['count','fee_bps','slippage_bps']) params.set(input, String(form.get(input)))
+    setSimulationError('')
+    try {setSimulation(await api<Simulation>('/backtest?'+params))}
+    catch(e) {setSimulationError((e as Error).message)}
+  }
   const holdout = simulation?.out_of_sample as {count:number; expectancy:number|null}|null|undefined
   const folds = simulation?.walk_forward as {start:number; end:number; count:number}[]|undefined
   return <main>
@@ -95,9 +157,10 @@ function App() {
         <div className="controls">
           <select aria-label="Activo" value={symbol} onChange={e=>setSymbol(e.target.value)}>{!assets.length && <option value="">Sin activos</option>}{assets.map(a=><option key={a.symbol}>{a.symbol}</option>)}</select>
           <select aria-label="Temporalidad" value={interval} onChange={e=>setInterval(e.target.value)}>{['1m','5m','15m','30m','1h','4h','1d','1w'].map(i=><option key={i}>{i}</option>)}</select>
+          <label><input type="checkbox" checked={levels} onChange={e=>setLevels(e.target.checked)}/> Niveles de indicadores</label>
           <label><input type="checkbox" checked={overlays} onChange={e=>setOverlays(e.target.checked)}/> Patrones</label>
         </div>
-        {error ? <p role="alert">{error}</p> : loading ? <p>Cargando velas cerradas…</p> : result?.bars.length ? <><Chart result={result} overlays={overlays}/><p>{result.source} · Tendencia {result.technical.trend} · Último cierre {result.bars.at(-1)?.close}</p><dl>{Object.entries(result.technical.indicators).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.map(v=>v.toFixed(2)).join(' – ') : value?.toFixed(2) ?? '—'}</dd></div>)}</dl></> : <p>{symbol ? 'Sin velas cerradas disponibles' : 'Añade un activo para ver sus velas'}</p>}
+        {error ? <p role="alert">{error}</p> : loading ? <p>Cargando velas cerradas…</p> : result?.bars.length ? <><Chart result={result} overlays={overlays} levels={levels}/><p>{result.source} · Tendencia {result.technical.trend} · Último cierre {result.bars.at(-1)?.close}</p><dl>{Object.entries(result.technical.indicators).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.map(v=>v.toFixed(2)).join(' – ') : value?.toFixed(2) ?? '—'}</dd></div>)}</dl></> : <p>{symbol ? 'Sin velas cerradas disponibles' : 'Añade un activo para ver sus velas'}</p>}
       </article>
       <aside className="panel">
         <h2>Añadir activo</h2>
@@ -110,8 +173,19 @@ function App() {
       </aside>
     </section>
     <section className="workspace">
-      <article className="panel"><h2>Alertas recientes</h2>{alerts.length ? alerts.map(a=><p key={a.symbol+a.observed_at}>{a.symbol} · {a.direction} · {a.price} · {new Date(a.observed_at*1000).toLocaleString()}<br/>{a.evidence.join(' · ')}</p>) : <p>Sin alertas registradas</p>}</article>
-      <article className="panel"><h2>Simulación histórica</h2><button disabled={!symbol} onClick={()=>api<Simulation>('/backtest?'+new URLSearchParams({symbol})).then(setSimulation).catch(e=>setError(e.message))}>Ejecutar</button>{simulation && <dl>{Object.entries(simulation).filter(([,value])=>value == null || typeof value !== 'object').map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value === 'number' ? Number(value.toFixed(4)) : String(value ?? '—')}</dd></div>)}</dl>}
+      <article className="panel"><h2>Alertas recientes</h2>{alerts.length
+        ? alerts.map(signal=><Signal key={signal.symbol+signal.observed_at} signal={signal}/>)
+        : <p>Sin alertas registradas</p>}
+        <h2>Historial de decisiones</h2>{history.filter(signal=>signal.symbol===symbol).slice(0,30)
+          .map(signal=><Signal key={signal.observed_at} signal={signal}/>)}
+      </article>
+      <article className="panel"><h2>Simulación histórica</h2>
+        <form onSubmit={runSimulation}>
+          <label>Velas <input name="count" type="number" min={300} max={5000} defaultValue={3000} required/></label>
+          <label>Comisión (pb) <input name="fee_bps" type="number" min={0} max={500} step=".1" defaultValue={10} required/></label>
+          <label>Deslizamiento (pb) <input name="slippage_bps" type="number" min={0} max={500} step=".1" defaultValue={5} required/></label>
+          <button disabled={!symbol}>Ejecutar</button>
+        </form>{simulationError && <p role="alert">{simulationError}</p>}{simulation && <dl>{Object.entries(simulation).filter(([,value])=>value == null || typeof value !== 'object').map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value === 'number' ? Number(value.toFixed(4)) : String(value ?? '—')}</dd></div>)}</dl>}
         {holdout && <p>Último tramo · {holdout.count} señales · Expectativa {holdout.expectancy?.toFixed(4) ?? '—'}</p>}
         {!!folds?.length && <p>Ventanas cronológicas · {folds.map(fold=>fold.count).join(' / ')} señales</p>}
       </article>
@@ -119,7 +193,21 @@ function App() {
     <section className="workspace">
       <article className="panel"><h2>Noticias</h2>{news.length ? news.slice(0,12).map(n=><p key={n.url}><a href={n.url} target="_blank" rel="noreferrer">{n.title}</a><br/>{n.source} {n.published}</p>) : <p>Sin titulares disponibles</p>}
       <button disabled={!symbol} onClick={()=>api<{text:string|null; error?:string}>('/context?'+new URLSearchParams({symbol})).then(value=>setContext(value.text ?? value.error ?? 'IA desactivada')).catch(e=>setContext(e.message))}>Consultar contexto</button>{context && <p>{context}</p>}</article>
-      <aside className="panel"><h2>Estado de las fuentes</h2>{Object.entries(sources).length ? Object.entries(sources).map(([key,value])=><p key={key}>{key} · {value.status}</p>) : <p>Sin consultas registradas</p>}</aside>
+      <aside className="panel"><h2>Servidor</h2>
+      {server && <p>Inicio {dateTime(server.started_at)} · {server.monitor.error ?? (server.monitor.last_cycle ? 'Último ciclo '+dateTime(server.monitor.last_cycle) : 'Esperando primer ciclo')}</p>}
+      <h2>Estado de las fuentes</h2>{Object.entries(sources).length ? Object.entries(sources).map(([key,value])=><p key={key}>{key} · {value.status}</p>) : <p>Sin consultas registradas</p>}</aside>
+    </section>
+    <section className="panel">
+      <h2>Configuración</h2>
+      {settingsError && <p role="alert">{settingsError}</p>}
+      {settings && <>
+        <p>IA local o externa · {settings.ai.provider} {settings.ai.model ?? ''}</p>
+        <p>Discord {settings.notifications.discord ? 'activo' : 'inactivo'} · Telegram {settings.notifications.telegram ? 'activo' : 'inactivo'}</p>
+        <h3>Fuentes de noticias</h3>
+        {settings.feeds.allowed.length ? settings.feeds.allowed.map(url=><p key={url}><label>
+          <input type="checkbox" checked={settings.feeds.enabled.includes(url)} onChange={e=>void updateFeed(url,e.target.checked)}/> {new URL(url).hostname}
+        </label></p>) : <p>Configura fuentes autorizadas en el servidor.</p>}
+      </>}
     </section>
   </main>
 }
