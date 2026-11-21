@@ -14,6 +14,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 import httpx
 from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, cast, create_engine, select
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 
@@ -35,7 +36,8 @@ decisions = Table("decisions", metadata,
                   Column("symbol", String, primary_key=True),
                   Column("observed_at", BigInteger, primary_key=True), Column("payload", JSON))
 settings = Table("settings", metadata, Column("key", String, primary_key=True), Column("payload", JSON))
-engine = create_engine(os.getenv("DATABASE_URL", f"sqlite:///{data / 'market.db'}"), pool_pre_ping=True)
+database_url = os.getenv("DATABASE_URL") or URL.create("sqlite", database=str(data / "market.db"))
+engine = create_engine(database_url, pool_pre_ping=True)
 status = {}
 cache = {}
 provider_slots = asyncio.Semaphore(3)
@@ -378,7 +380,7 @@ async def context(symbol: str):
     return await commentary(data)
 
 
-distribution = Path("frontend/dist")
+distribution = Path(os.getenv("MARKET_FRONTEND_DIR", "frontend/dist"))
 if distribution.is_dir():
     @app.get("/", dependencies=[Depends(authorized)])
     def dashboard():

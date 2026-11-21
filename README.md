@@ -5,6 +5,13 @@ alertas informativas. El dossier AURUM AI sirve de referencia para incorporar
 XAUUSD y otros activos de MT5 por CSV. El backend también acepta símbolos
 de Binance Spot. La elección de símbolo y proveedor se hace en el panel.
 
+## Aplicación de escritorio
+
+Descarga el paquete para Windows o Linux y abre Market Intelligence AI
+en su propia ventana. El motor y SQLite se ejecutan en el mismo ordenador.
+Consulta la [guía de escritorio](docs/desktop.md) para instalar, actualizar
+y configurar las fuentes y alertas.
+
 ## Desarrollo en la nube
 
 Requiere Python 3.12, uv y Node 24. Desde la raíz:

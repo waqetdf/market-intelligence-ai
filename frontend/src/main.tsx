@@ -211,7 +211,7 @@ function App() {
       <article className="panel"><h2>Noticias</h2>{news.length ? news.slice(0,12).map(n=><p key={n.url}><a href={n.url} target="_blank" rel="noreferrer">{n.title}</a><br/>{n.source} {n.published}</p>) : <p>Sin titulares disponibles</p>}
       <button disabled={!symbol} onClick={()=>api<{text:string|null; error?:string; references?:News[]}>('/context?'+new URLSearchParams({symbol})).then(value=>{setContext(value.text ?? value.error ?? 'IA desactivada'); setReferences(value.references ?? [])}).catch(e=>setContext(e.message))}>Consultar contexto</button>{context && <p>{context}</p>}
       {references.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}</article>
-      <aside className="panel"><h2>Servidor</h2>
+      <aside className="panel"><h2>Motor de análisis</h2>
       {server && <p>Inicio {dateTime(server.started_at)} · {server.monitor.error ?? (server.monitor.last_cycle ? 'Último ciclo '+dateTime(server.monitor.last_cycle) : 'Esperando primer ciclo')}</p>}
       <h2>Estado de las fuentes</h2>{Object.entries(sources).length ? Object.entries(sources).map(([key,value])=><p key={key}>{key} · {value.status}</p>) : <p>Sin consultas registradas</p>}</aside>
     </section>

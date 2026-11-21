@@ -1,0 +1,44 @@
+name: Desktop packages
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  desktop:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Market-Intelligence-AI-Windows-x64
+          - os: ubuntu-24.04
+            artifact: Market-Intelligence-AI-Linux-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      MARKET_NEWS_FEEDS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: uv sync --locked --group desktop
+      - run: uv run --locked --group desktop pyinstaller --noconfirm --windowed --name MarketIntelligenceAI --add-data frontend/dist:frontend/dist desktop.py
+      - if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+        run: |
+          dist/MarketIntelligenceAI/MarketIntelligenceAI --smoke-test
+          tar -czf Market-Intelligence-AI-Linux-x64.tar.gz -C dist MarketIntelligenceAI
+      - if: runner.os == 'Windows'
+        run: |
+          $process = Start-Process -FilePath "dist/MarketIntelligenceAI/MarketIntelligenceAI.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+          Compress-Archive -Path dist/MarketIntelligenceAI -DestinationPath Market-Intelligence-AI-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.*
+          if-no-files-found: error
