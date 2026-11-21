@@ -37,10 +37,29 @@ aplicación. Un Ollama local puede usar `http://127.0.0.1:11434`.
 El escritorio crea su propia base SQLite. Los datos de instalaciones
 PostgreSQL requieren una migración aparte.
 
-Mientras la ventana siga abierta, el monitor continúa trabajando aunque
-la minimices. Al salir o suspender el equipo se interrumpe la vigilancia.
-Para respaldar datos locales, cierra la app y copia su carpeta de datos.
-Contiene los secretos de integraciones si creaste un archivo `.env`.
+La bandeja del sistema mantiene el monitor activo al cerrar la ventana y
+muestra notificaciones nativas cuando el sistema admite bandeja. Usa **Salir**
+en Archivo o en la bandeja para detener el motor. En escritorios sin bandeja,
+minimiza la ventana para mantenerla activa. El equipo debe seguir encendido.
+
+**Archivo → Crear copia de la base de datos** genera un archivo SQLite
+consistente en `backups`. La aplicación guarda además una copia automática
+por día UTC de uso y conserva las últimas 14. Para restaurar, sal de la app,
+preserva el `market.db` actual y copia la instantánea seleccionada como
+`market.db`. Conserva por separado los CSV y el archivo de secretos.
+
+## Estrategia y resultados
+
+Desde Configuración puedes ajustar la ventana de ruptura, exigir un barrido
+o un FVG abierto en 5m, filtrar por volumen o distancia en ATR y pausar
+señales alrededor de publicaciones oficiales del BLS. Añade o retira RSS
+públicos autorizados en la misma sección. Mantén las credenciales del
+proveedor en el archivo de configuración local.
+
+La ventana separa el historial de decisiones, las simulaciones históricas
+guardadas por activo y temporalidad y el seguimiento simulado de alertas
+generadas en vivo. En todos los casos el usuario decide si opera por su cuenta.
+
 
 ## Ejecutar desde el código fuente
 
@@ -56,7 +75,7 @@ uv run --locked --group desktop python desktop.py
 Para compilar un paquete en el propio sistema de destino:
 
 ```bash
-uv run --locked --group desktop pyinstaller --noconfirm --windowed --name MarketIntelligenceAI --add-data frontend/dist:frontend/dist desktop.py
+uv run --locked --group desktop pyinstaller --noconfirm --windowed --name MarketIntelligenceAI --collect-data tzdata --add-data frontend/dist:frontend/dist desktop.py
 ```
 
 El resultado está en `dist/MarketIntelligenceAI/`. La ventana se comunica

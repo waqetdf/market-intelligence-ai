@@ -7,15 +7,17 @@ from pathlib import Path
 import secrets
 import sys
 from tempfile import TemporaryDirectory
+import sqlite3
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
+from PySide6.QtCore import QLockFile, QObject, QStandardPaths, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineUrlRequestInterceptor
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QStyle, QSystemTrayIcon
 
 from backend.desktop_runtime import DesktopRuntime, TOKEN_HEADER
+from backend.local_backup import backup_database
 
 
 def is_local(url, port):
@@ -55,8 +57,42 @@ class DashboardPage(QWebEnginePage):
         return False
 
 
-def show_dashboard(gui, directory, runtime, token, smoke_test):
-    window = QMainWindow()
+class DesktopEvents(QObject):
+    alert = Signal(str, str)
+
+
+class DesktopWindow(QMainWindow):
+    @Slot(str, str)
+    def show_alert(self, title, text):
+        self.tray.showMessage(title, text)
+
+    def closeEvent(self, event):
+        if getattr(self, "tray", None) and self.tray.isVisible():
+            self.hide()
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+
+def setup_tray(gui, window, events):
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        return
+    gui.setQuitOnLastWindowClosed(False)
+    icon = gui.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    tray = QSystemTrayIcon(icon, window)
+    tray.setToolTip("Market Intelligence AI")
+    menu = QMenu(window)
+    menu.addAction("Abrir", window.showNormal)
+    menu.addAction("Salir", gui.quit)
+    tray.setContextMenu(menu)
+    tray.activated.connect(lambda reason: window.showNormal() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+    events.alert.connect(window.show_alert, Qt.ConnectionType.QueuedConnection)
+    window.tray = tray
+    tray.show()
+
+
+def show_dashboard(gui, directory, runtime, token, smoke_test, events):
+    window = DesktopWindow()
     window.setWindowTitle("Market Intelligence AI")
     window.resize(1350, 900)
     profile = QWebEngineProfile(window)
@@ -69,7 +105,24 @@ def show_dashboard(gui, directory, runtime, token, smoke_test):
     menu = window.menuBar().addMenu("Archivo")
     action = menu.addAction("Abrir carpeta de datos")
     action.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))))
+    def backup(automatic=False):
+        try:
+            saved = backup_database(directory, automatic=automatic)
+            if not automatic:
+                QMessageBox.information(window, "Copia local creada", str(saved))
+        except (OSError, sqlite3.Error) as exc:
+            logging.error("No se pudo crear la copia local (%s)", type(exc).__name__)
+            if not automatic:
+                QMessageBox.warning(window, "Copia local", "No se pudo crear la copia.")
+
+    menu.addAction("Crear copia de la base de datos", lambda: backup())
     menu.addAction("Salir", gui.quit)
+    if not smoke_test:
+        setup_tray(gui, window, events)
+        backup_timer = QTimer(window)
+        backup_timer.timeout.connect(lambda: backup(automatic=True))
+        backup_timer.start(60 * 60 * 1000)
+        QTimer.singleShot(1000, lambda: backup(automatic=True))
     page.load(QUrl(f"http://127.0.0.1:{runtime.port}/"))
     window.show()
     if smoke_test:
@@ -123,10 +176,14 @@ def main():
         ])
         from backend.app import app, engine
 
+        events = DesktopEvents()
+        app.state.desktop_alert = lambda alert: events.alert.emit(
+            f"{alert['symbol']} · {alert['direction']}", f"Precio {alert['price']} · {alert['timeframe']}")
+        os.environ["MARKET_DESKTOP"] = "1"
         token = secrets.token_hex(32).encode("ascii")
         try:
             with DesktopRuntime(app, token) as runtime:
-                return show_dashboard(gui, directory, runtime, token, smoke_test)
+                return show_dashboard(gui, directory, runtime, token, smoke_test, events)
         finally:
             engine.dispose()
     except (OSError, RuntimeError) as exc:

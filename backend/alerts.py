@@ -16,7 +16,7 @@ def format_alert(payload):
              *payload["evidence"],
              f"Invalidación: {payload['invalidation']} · Objetivo: {payload['target']}",
              f"Zona: {payload.get('interest_zone', '—')} · R/B: {payload['reward_risk']}",
-             "Calidad: pendiente de calibración",
+             f"Calidad: {payload.get('quality', {}).get('status', 'sin calibrar')}",
              *payload["risks"],
              "Aviso informativo. No se ha ejecutado ninguna operación."]
     if assessment := payload.get("assessment"):

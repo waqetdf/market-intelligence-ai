@@ -92,3 +92,30 @@ ejecutar sin llamadas al proveedor.
 Las solicitudes del proceso a Binance se espacian al menos 200 ms,
 incluida la paginación del backtest. El panel reutiliza una caché breve
 de velas, y consulta el estado y los resultados cada 30 segundos.
+
+## Reglas y evaluación en escritorio
+
+La estrategia editable usa valores cerrados y compartidos entre el escaneo
+de 15m y el backtest. El umbral ATR acota la distancia al nivel de
+invalidación. El barrido debe haberse confirmado en la ventana de ruptura,
+en la misma dirección. El FVG adicional de 5m debe estar abierto en el
+instante de decisión. La simulación habilita esa condición entre 1m y 30m.
+Una pausa macro opcional bloquea nuevas alertas alrededor de CPI, PPI,
+Employment Situation y JOLTS del calendario oficial del BLS. Si el
+calendario falla y se exige la pausa, el monitor se abstiene. El backtest
+usa datos de precio y volumen, y declara que excluye el calendario, las
+noticias y el modelo.
+
+La etiqueta de respaldo solo utiliza una simulación guardada del mismo
+activo, marco y configuración, creada antes de la alerta. Con menos de 50
+señales en reserva se informa muestra insuficiente. Por encima de ese
+umbral, la etiqueta preliminar requiere expectativa neta positiva y
+un límite inferior de Wilson al 95 % por encima del 50 % de precisión.
+Es una comprobación exploratoria, ya que puede haber dependencia entre
+observaciones. La condición macro activa impide aplicar esta etiqueta.
+
+El seguimiento en vivo conserva por separado el resultado simulado de la
+primera vela posterior de cada alerta. Usa apertura y cierre de esa vela,
+con 10 pb de comisión y 5 pb de deslizamiento por lado. Si falta esa vela,
+la alerta no se puntúa. La vista calcula resultados sobre las últimas 100
+evaluaciones disponibles.

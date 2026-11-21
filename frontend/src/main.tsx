@@ -7,13 +7,18 @@ type Asset = {symbol:string; source:string; ticker:string}
 type Bar = {time:UTCTimestamp; open:number; high:number; low:number; close:number}
 type Event = {kind:string; side:string; level:number; time:number}
 type Result = {bars:Bar[]; source:string; technical:{trend:string; events:Event[]; indicators:Record<string, number | number[] | null>}}
-type Simulation = Record<string,unknown>
+type Simulation = Record<string,unknown> & {id:string; created_at:number; timeframe:string}
+type Forward = {count:number; expectancy:number|null; positive:number;
+  items:{observed_at:number; resolved_at:number; direction:string; net_return:number}[]}
+type Release = {title:string; starts_at:number; source:string; url:string}
+type Strategy = {window:number; volume_min:number; require_sweep:boolean; require_fvg:boolean; max_stop_atr:number; macro_pause_minutes:number}
 type News = {title:string; url:string; source:string; published:string|null}
 type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[];
+  quality?:{status:string; sample?:number}; interest_zone?:number[]; calendar?:Release[];
   risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
   chart?:string|null; news?:News[]; assessment?:{text:string}; trends?:Record<string,string>}
 type Integration = 'ai' | 'discord' | 'telegram'
-type Settings = {feeds:{allowed:string[]; enabled:string[]}; ai:{provider:string; model:string|null};
+type Settings = {strategy:Strategy; feeds:{allowed:string[]; enabled:string[]; editable:boolean}; ai:{provider:string; model:string|null};
   configured:Record<Integration,boolean>; integrations:Record<Integration,boolean>}
 type Server = {started_at:number; monitor:{last_cycle?:number; error?:string|null}}
 const dateTime = (timestamp:number) => new Date(timestamp*1000).toLocaleString()
@@ -25,6 +30,9 @@ function Signal({signal}:{signal:Alert}) {
     {!!signal.trends && <p>{Object.entries(signal.trends).map(([frame, trend])=>frame+' '+trend).join(' · ')}</p>}
     {!!signal.risks?.length && <p>{signal.risks.join(' · ')}</p>}
     {signal.invalidation != null && <p>Invalidación {signal.invalidation} · Objetivo {signal.target ?? '—'} · R/B {signal.reward_risk?.toFixed(2) ?? '—'}</p>}
+    {signal.quality && signal.direction !== 'sin señal' && <p>Calidad · {signal.quality.status}{signal.quality.sample != null && ' · '+signal.quality.sample+' señales históricas'}</p>}
+    {signal.interest_zone && <p>Zona de interés · {signal.interest_zone.join(' – ')}</p>}
+    {signal.calendar?.map(item=><p key={item.title+item.starts_at}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {dateTime(item.starts_at)}</p>)}
     {signal.chart && <p><a href={signal.chart} target="_blank" rel="noreferrer">Gráfico del proveedor</a></p>}
     {signal.assessment?.text && <p>{signal.assessment.text}</p>}
     {signal.news?.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}
@@ -80,6 +88,7 @@ function App() {
   const [alerts,setAlerts] = useState<Alert[]>([])
   const [overlays,setOverlays] = useState(true)
   const [levels,setLevels] = useState(false)
+  const [forward,setForward] = useState<Forward>()
   const [history,setHistory] = useState<Alert[]>([])
   const [settings,setSettings] = useState<Settings>()
   const [server,setServer] = useState<Server>()
@@ -87,6 +96,10 @@ function App() {
   const [simulationError,setSimulationError] = useState('')
   const [error,setError] = useState('')
   const [formError,setFormError] = useState('')
+  const [saved,setSaved] = useState<Simulation[]>([])
+  const [simulationBusy,setSimulationBusy] = useState(false)
+  const [calendar,setCalendar] = useState<{items:Release[]; error?:string|null}>({items:[]})
+  const [strategySaved,setStrategySaved] = useState(false)
   const [simulation,setSimulation] = useState<Simulation>()
   const [loading,setLoading] = useState(false)
   const [news,setNews] = useState<News[]>([])
@@ -103,6 +116,7 @@ function App() {
         api<Alert[]>('/history').then(setHistory),
         api<{items:News[]}>('/news').then(data=>setNews(data.items)),
         api<Server>('/server').then(setServer),
+        api<{items:Release[]; error?:string|null}>('/calendar').then(setCalendar),
         api<Record<string,{status:string}>>('/status').then(setSources),
       ])
     }
@@ -113,16 +127,23 @@ function App() {
   useEffect(() => {
     setResult(undefined)
     setSimulation(undefined)
+    setSaved([])
+    setForward(undefined)
     setSimulationError('')
     setContext('')
     setReferences([])
     if (!symbol) return
     const controller = new AbortController()
+    api<Simulation[]>('/simulations?'+new URLSearchParams({symbol}), {signal:controller.signal})
+      .then(setSaved).catch(()=>{})
     setLoading(true)
     setError('')
-    const refresh = () => api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
+    const refresh = () => {
+      void api<Forward>('/forward?'+new URLSearchParams({symbol}),{signal:controller.signal}).then(setForward).catch(()=>{})
+      return api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
       .then(setResult).catch(e => {if (!controller.signal.aborted) setError(e.message)})
       .finally(() => {if (!controller.signal.aborted) {setLoading(false); api<Record<string,{status:string}>>('/status').then(setSources).catch(()=>{})}})
+    }
     void refresh()
     const timer = setIntervalGlobal(refresh)
     return () => {controller.abort(); window.clearInterval(timer)}
@@ -156,14 +177,46 @@ function App() {
     } catch(e) {setSettingsError((e as Error).message)}
   }
 
+  async function editFeed(url:string, remove=false) {
+    if (!settings) return
+    setSettingsError('')
+    const urls = remove ? settings.feeds.allowed.filter(item=>item!==url) : [...settings.feeds.allowed, url]
+    try {
+      setSettings(await api<Settings>('/settings/feed-catalog',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({urls})}))
+    } catch(e) {setSettingsError((e as Error).message)}
+  }
+
+  async function saveStrategy(event:FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setStrategySaved(false)
+    setSettingsError('')
+    const strategy = {
+      window:Number(form.get('window')), volume_min:Number(form.get('volume_min')),
+      max_stop_atr:Number(form.get('max_stop_atr')), macro_pause_minutes:Number(form.get('macro_pause_minutes')),
+      require_sweep:form.has('require_sweep'), require_fvg:form.has('require_fvg'),
+    }
+    try {
+      setSettings(await api<Settings>('/settings/strategy',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(strategy)}))
+      setStrategySaved(true)
+    } catch(e) {setSettingsError((e as Error).message)}
+  }
+
   async function runSimulation(event:FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const params = new URLSearchParams({symbol})
-    for (const input of ['count','fee_bps','slippage_bps']) params.set(input, String(form.get(input)))
+    for (const input of ['interval','count','fee_bps','slippage_bps']) params.set(input, String(form.get(input)))
     setSimulationError('')
-    try {setSimulation(await api<Simulation>('/backtest?'+params))}
-    catch(e) {setSimulationError((e as Error).message)}
+    setSimulationBusy(true)
+    try {
+      const report = await api<Simulation>('/backtest?'+params,{method:'POST'})
+      setSimulation(report)
+      setSaved(items=>[report,...items].slice(0,30))
+    } catch(e) {setSimulationError((e as Error).message)}
+    finally {setSimulationBusy(false)}
   }
   const holdout = simulation?.out_of_sample as {count:number; expectancy:number|null}|null|undefined
   const folds = simulation?.walk_forward as {start:number; end:number; count:number}[]|undefined
@@ -193,16 +246,27 @@ function App() {
       <article className="panel"><h2>Alertas recientes</h2>{alerts.length
         ? alerts.map(signal=><Signal key={signal.symbol+signal.observed_at} signal={signal}/>)
         : <p>Sin alertas registradas</p>}
+        <h2>Seguimiento simulado de alertas en vivo</h2>
+        {forward?.count ? <>
+          <p>Últimas {forward.count} evaluadas · {forward.positive} positivas · Expectativa {((forward.expectancy ?? 0)*100).toFixed(2)} %</p>
+          <details><summary>Ver resultados</summary>{forward.items.slice(0,20).map(item=>
+            <p key={item.observed_at}>{dateTime(item.observed_at)} · {item.direction} · {(item.net_return*100).toFixed(2)} % simulado</p>)}</details>
+        </> : <p>Sin alertas con una vela posterior evaluable.</p>}
         <h2>Historial de decisiones</h2>{history.filter(signal=>signal.symbol===symbol).slice(0,30)
           .map(signal=><Signal key={signal.observed_at} signal={signal}/>)}
       </article>
       <article className="panel"><h2>Simulación histórica</h2>
         <form onSubmit={runSimulation}>
+          <label>Temporalidad <select name="interval" defaultValue="15m">{timeframes.filter(frame=>frame!=='1w').map(frame=><option key={frame}>{frame}</option>)}</select></label>
           <label>Velas <input name="count" type="number" min={300} max={5000} defaultValue={3000} required/></label>
           <label>Comisión (pb) <input name="fee_bps" type="number" min={0} max={500} step=".1" defaultValue={10} required/></label>
           <label>Deslizamiento (pb) <input name="slippage_bps" type="number" min={0} max={500} step=".1" defaultValue={5} required/></label>
-          <button disabled={!symbol}>Ejecutar</button>
+          <button disabled={!symbol || simulationBusy}>{simulationBusy ? 'Simulando…' : 'Ejecutar'}</button>
         </form>{simulationError && <p role="alert">{simulationError}</p>}{simulation && <dl>{Object.entries(simulation).filter(([,value])=>value == null || typeof value !== 'object').map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value === 'number' ? Number(value.toFixed(4)) : String(value ?? '—')}</dd></div>)}</dl>}
+        {!!saved.length && <label>Resultados guardados <select value={simulation?.id ?? ''} onChange={e=>setSimulation(saved.find(item=>item.id===e.target.value))}>
+          <option value="">Seleccionar simulación</option>
+          {saved.map(item=><option key={item.id} value={item.id}>{item.timeframe} · {dateTime(item.created_at)}</option>)}
+        </select></label>}
         {holdout && <p>Último tramo · {holdout.count} señales · Expectativa {holdout.expectancy?.toFixed(4) ?? '—'}</p>}
         {!!folds?.length && <p>Ventanas cronológicas · {folds.map(fold=>fold.count).join(' / ')} señales</p>}
       </article>
@@ -213,6 +277,11 @@ function App() {
       {references.map(item=><p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> · {item.source}</p>)}</article>
       <aside className="panel"><h2>Motor de análisis</h2>
       {server && <p>Inicio {dateTime(server.started_at)} · {server.monitor.error ?? (server.monitor.last_cycle ? 'Último ciclo '+dateTime(server.monitor.last_cycle) : 'Esperando primer ciclo')}</p>}
+      <h2>Calendario macroeconómico</h2>
+      {calendar.error && <p>Calendario BLS indisponible · {calendar.error}</p>}
+      {calendar.items.length ? calendar.items.slice(0,8).map(item=><p key={item.title+item.starts_at}>
+        <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a><br/>{dateTime(item.starts_at)} · {item.source}
+      </p>) : <p>Sin publicaciones próximas disponibles</p>}
       <h2>Estado de las fuentes</h2>{Object.entries(sources).length ? Object.entries(sources).map(([key,value])=><p key={key}>{key} · {value.status}</p>) : <p>Sin consultas registradas</p>}</aside>
     </section>
     <section className="panel">
@@ -225,10 +294,28 @@ function App() {
           {key === 'ai' ? 'IA · '+settings.ai.provider+' '+(settings.ai.model ?? '') : key === 'discord' ? 'Discord' : 'Telegram'}
           {!settings.configured[key] && ' · sin configurar'}
         </label></p>)}
+        <h3>Reglas de alertas y simulación</h3>
+        <form key={JSON.stringify(settings.strategy)} onSubmit={saveStrategy}>
+          <label>Ventana de ruptura en velas <input name="window" type="number" min={1} max={50} defaultValue={settings.strategy.window} required/></label>
+          <label>Volumen relativo mínimo <input name="volume_min" type="number" min={0} max={20} step=".1" defaultValue={settings.strategy.volume_min} required/></label>
+          <label><input name="require_sweep" type="checkbox" defaultChecked={settings.strategy.require_sweep}/> Exigir barrido</label>
+          <label><input name="require_fvg" type="checkbox" defaultChecked={settings.strategy.require_fvg}/> Exigir FVG abierto en 5m</label>
+          <label>Distancia máxima en ATR (0 desactiva) <input name="max_stop_atr" type="number" min={0} max={20} step=".1" defaultValue={settings.strategy.max_stop_atr} required/></label>
+          <label>Pausa ante publicaciones BLS en minutos (0 desactiva) <input name="macro_pause_minutes" type="number" min={0} max={180} defaultValue={settings.strategy.macro_pause_minutes} required/></label>
+          <button>Guardar reglas</button>{strategySaved && <p role="status">Reglas guardadas</p>}
+        </form>
         <h3>Fuentes de noticias</h3>
+        {settings.feeds.editable && <form onSubmit={event=>{
+          event.preventDefault()
+          const url = String(new FormData(event.currentTarget).get('feed')).trim()
+          void editFeed(url)
+        }}>
+          <label>URL pública RSS o Atom <input name="feed" type="url" required placeholder="https://…"/></label>
+          <button>Añadir fuente</button>
+        </form>}
         {settings.feeds.allowed.length ? settings.feeds.allowed.map(url=><p key={url}><label>
-          <input type="checkbox" checked={settings.feeds.enabled.includes(url)} onChange={e=>void updateFeed(url,e.target.checked)}/> {new URL(url).hostname}
-        </label></p>) : <p>Configura fuentes autorizadas en el servidor.</p>}
+          <input type="checkbox" checked={settings.feeds.enabled.includes(url)} onChange={e=>void updateFeed(url,e.target.checked)}/> {url}
+        </label>{settings.feeds.editable && <button onClick={()=>void editFeed(url,true)}>Quitar</button>}</p>) : <p>Configura fuentes autorizadas en el servidor.</p>}
       </>}
     </section>
   </main>

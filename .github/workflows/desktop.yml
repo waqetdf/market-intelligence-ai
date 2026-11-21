@@ -14,6 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       MARKET_NEWS_FEEDS: ""
+      MARKET_CALENDAR_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,7 +31,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libegl1 libgl1 libgbm1 libnss3 libasound2t64 libxcb-cursor0 libxkbcommon-x11-0 libxkbfile1 libopengl0 libxcomposite1 libxdamage1 libxrandr2 libxtst6
       - run: uv sync --locked --group desktop
-      - run: uv run --locked --group desktop pyinstaller --noconfirm --windowed --name MarketIntelligenceAI --add-data frontend/dist:frontend/dist desktop.py
+      - run: uv run --locked --group desktop pyinstaller --noconfirm --windowed --name MarketIntelligenceAI --collect-data tzdata --add-data frontend/dist:frontend/dist desktop.py
       - if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: offscreen
