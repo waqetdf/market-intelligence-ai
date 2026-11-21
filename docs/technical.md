@@ -77,3 +77,14 @@ MSS y la ventana Order Block con `MARKET_MSS_RANGE_MULTIPLE` y
 El monitor y el backtest evalúan cada marco de la regla principal con
 hasta 150 velas previas cerradas. Una ruptura declarada falsa antes o en
 el cierre evaluado deja de ser elegible como disparador.
+
+Para comprobar el contrato del proveedor y la causalidad sobre velas
+históricas reales de BTC/USDT, ejecuta desde la raíz:
+
+```bash
+MARKET_LIVE_TEST=1 uv run --locked python -m pytest -q
+```
+
+La prueba usa un corte UTC fijo y compara las confirmaciones obtenidas
+en los prefijos con las del histórico completo. La CI habitual se puede
+ejecutar sin llamadas al proveedor.
