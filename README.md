@@ -84,3 +84,9 @@ El análisis vincula titulares por símbolo o evento macro, etiqueta el
 sentimiento léxico y compara cierres observados antes y después. La etiqueta
 «titular sin verificar» conserva la distinción entre lo publicado y lo
 confirmado de forma independiente. Los titulares no determinan la dirección.
+
+El modelo solo puede proponer una clasificación de sentimiento y contexto
+con referencias a titulares ya recogidos. El servidor valida los índices
+y construye la explicación con textos controlados y las fuentes originales.
+Una respuesta inválida o una caída del modelo deja disponible todo el
+análisis determinista.

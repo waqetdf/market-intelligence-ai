@@ -28,3 +28,17 @@ def test_news_comparison_excludes_unclosed_reaction_and_future_items():
     article, = relevant_news([item], asset, bars, 120)
     assert article["price_comparison"]["to"] == 120
     assert article["sentiment"] == "positivo"
+
+
+def test_model_can_only_render_classifications_and_known_references():
+    import pytest
+
+    from backend.news import render_assessment
+
+    evidence = {"news": [{"title": "Published headline"}], "trend": "lateral"}
+    result = render_assessment('{"sentiment":"mixed","context":"mixed","references":[0]}', evidence)
+    assert result["references"] == evidence["news"]
+    with pytest.raises(ValueError):
+        render_assessment('{"sentiment":"positive","context":"consistent","references":[4]}', evidence)
+    with pytest.raises(ValueError):
+        render_assessment('{"sentiment":"positive","context":"consistent","references":[0],"price":1}', evidence)
