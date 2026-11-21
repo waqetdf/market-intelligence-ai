@@ -1,23 +1,27 @@
 """Deterministic confluence and closed-bar replay."""
 
+import os
+
 from backend.technical import analyze
 
 
-def opportunity(bars, context, current):
+def opportunity(bars, context, current, frames=None):
+    window = max(1, int(os.getenv("MARKET_STRUCTURE_WINDOW", "5")))
+    volume_min = max(0, float(os.getenv("MARKET_RELATIVE_VOLUME_MIN", "1")))
     result = {"direction": "sin señal", "evidence": [], "risks": [], "invalidation": None,
               "target": None, "reward_risk": None}
     if len(bars) < 35 or context is None or not context["indicators"]:
         result["risks"].append("Histórico o contexto insuficiente")
         return result
     trend = current["trend"]
-    recent = {bar.time for bar in bars[-5:]}
+    recent = {bar.time for bar in bars[-window:]}
     structure = [event for event in current["events"] if event["time"] in recent
                  and event["side"] == trend and event["kind"] in ("BOS", "CHoCH")]
     if not structure or context["trend"] != trend:
         result["risks"].append("Sin ruptura reciente alineada con la temporalidad superior")
         return result
     relative_volume = current["indicators"]["relative_volume"]
-    if relative_volume is None or relative_volume < 1:
+    if relative_volume is None or relative_volume < volume_min:
         result["risks"].append("Volumen relativo insuficiente")
         return result
     bullish = trend == "alcista"
@@ -31,11 +35,32 @@ def opportunity(bars, context, current):
               and (event["level"] > price if bullish else event["level"] < price)]
     target = (min(levels) if bullish else max(levels)) if levels else None
     result.update(trigger_time=structure[-1]["time"], direction="posible compra" if bullish else "posible venta",
-                  evidence=[structure[-1]["kind"], "Tendencia superior alineada", "Volumen relativo ≥ 1"],
+                  evidence=[structure[-1]["kind"], "Tendencia superior alineada", f"Volumen relativo {relative_volume:.2f} ≥ {volume_min:g}"],
                   invalidation=stop, target=target,
                   reward_risk=abs(target - price) / abs(price - stop) if target is not None else None)
     if target is None:
         result["risks"].append("Sin objetivo justificado por un swing superior")
+    result["patterns"] = [structure[-1]]
+    result["quality"] = {"status": "sin calibrar"}
+    atr = current["indicators"].get("atr")
+    if atr and abs(price - stop) > 3 * atr:
+        result["risks"].append("Invalidación a más de tres ATR")
+    for interval, report in (frames or {}).items():
+        if interval in ("1h", "1d", "1w") and report["trend"] not in ("lateral", trend):
+            result["risks"].append(f"Tendencia contraria en {interval}")
+    for frame, kind in (("5m", "FVG"), ("15m", "Liquidity Sweep")):
+        report = (frames or {}).get(frame, current if frame == "15m" else {})
+        if kind == "FVG":
+            match = next((gap for gap in reversed(report.get("gaps", []))
+                          if gap["state"] == "abierto" and gap["side"] == trend), None)
+        else:
+            match = next((event for event in reversed(report.get("events", []))
+                          if event["kind"] == kind and event["side"] == trend and event["time"] in recent), None)
+        if match:
+            result["patterns"].append(dict(match, kind=kind, timeframe=frame))
+            result["evidence"].append(f"{kind} concordante en {frame}")
+            if kind == "FVG":
+                result["interest_zone"] = [match["low"], match["high"]]
     return result
 
 

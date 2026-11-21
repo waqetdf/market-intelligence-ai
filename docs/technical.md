@@ -45,3 +45,11 @@ marca Mitigation Block. Un cierre por el lado opuesto del rango lo invalida
 y marca Breaker Block. Son definiciones operativas de esta implementación.
 La liquidez compradora y vendedora se representa mediante el último swing
 alto y bajo confirmado.
+
+El monitor consulta las ocho temporalidades, limita a tres las solicitudes
+simultáneas y descarta contexto posterior al cierre evaluado o con dos
+periodos de antigüedad. Persiste también «sin señal» por activo y cierre de
+15 minutos. El contexto adicional muestra FVG abiertos y barridos concordantes,
+distancia en ATR y tendencias contrarias en 1h, 1d o 1w. El volumen mínimo y
+la ventana de rupturas se configuran con `MARKET_RELATIVE_VOLUME_MIN` y
+`MARKET_STRUCTURE_WINDOW`. Se omite la puntuación hasta disponer de calibración.

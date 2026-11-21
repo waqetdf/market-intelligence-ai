@@ -1,5 +1,6 @@
 """Normalized closed candles and read-only market data adapters."""
 
+import asyncio
 import csv
 from datetime import datetime
 from math import isfinite
@@ -54,7 +55,7 @@ def closed_candles(rows: list[Candle], now: int, limit: int) -> list[Candle]:
 
 async def get_candles(asset: Asset, interval: str, directory: Path, now: int, limit: int = 300):
     if asset.source == "mt5-csv":
-        return read_mt5_csv(directory, asset.ticker, interval, now, limit)
+        return await asyncio.to_thread(read_mt5_csv, directory, asset.ticker, interval, now, limit)
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(
             "https://data-api.binance.vision/api/v3/klines",

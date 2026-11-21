@@ -31,3 +31,30 @@ def test_multisource_registration_and_mt5_import(tmp_path: Path, monkeypatch):
         assert payload["bars"][0]["close"] == 11
         assert payload["bars"][0]["close_time"] - payload["bars"][0]["time"] == 900
         assert client.get("/api/candles", params={"symbol": "XAUUSD", "interval": "4h"}).status_code == 502
+
+
+def test_scan_records_closed_decision_once(tmp_path, monkeypatch):
+    import asyncio
+
+    from backend.market import Asset, Candle, INTERVALS
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'scan.db'}")
+    monkeypatch.setattr(application, "engine", engine)
+    application.metadata.create_all(engine)
+    calls = []
+
+    async def candles(asset, interval):
+        calls.append(interval)
+        closing = 1001 if interval == "4h" else 1000
+        return [Candle(time=1, close_time=closing, open=10, high=11, low=9, close=10, volume=5)]
+
+    monkeypatch.setattr(application, "candles", candles)
+    monkeypatch.setattr(application, "time", lambda: 1000)
+    asset = Asset(symbol="BTC/USDT", source="binance", ticker="BTCUSDT")
+    asyncio.run(application.scan_asset(asset))
+    asyncio.run(application.scan_asset(asset))
+    assert set(calls) == set(INTERVALS)
+    decision, = application.history()
+    assert decision["direction"] == "sin señal"
+    assert "4h" not in decision["trends"]
+    assert application.list_alerts() == []
