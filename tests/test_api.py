@@ -58,3 +58,22 @@ def test_scan_records_closed_decision_once(tmp_path, monkeypatch):
     assert decision["direction"] == "sin señal"
     assert "4h" not in decision["trends"]
     assert application.list_alerts() == []
+
+
+def test_admin_controls_only_preconfigured_integrations(tmp_path, monkeypatch):
+    monkeypatch.setattr(application, "engine", create_engine(f"sqlite:///{tmp_path / 'settings.db'}"))
+    monkeypatch.setattr(application, "data", tmp_path)
+    monkeypatch.setenv("MARKET_PASSWORD", "test-password")
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://example.org/private-webhook")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    with TestClient(application.app) as client:
+        assert client.get("/api/settings").status_code == 401
+        client.auth = ("admin", "test-password")
+        report = client.get("/api/settings")
+        assert report.json()["integrations"]["discord"]
+        assert "private-webhook" not in report.text
+        payload = {"discord": False, "ai": False, "telegram": True}
+        assert client.put("/api/settings/integrations", json=payload).status_code == 422
+        payload["telegram"] = False
+        assert client.put("/api/settings/integrations", json=payload).status_code == 200
+        assert not client.get("/api/settings").json()["integrations"]["discord"]

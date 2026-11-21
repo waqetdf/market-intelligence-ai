@@ -12,8 +12,9 @@ type News = {title:string; url:string; source:string; published:string|null}
 type Alert = {symbol:string; direction:string; price:number; observed_at:number; evidence:string[];
   risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
   chart?:string|null; news?:News[]; trends?:Record<string,string>}
+type Integration = 'ai' | 'discord' | 'telegram'
 type Settings = {feeds:{allowed:string[]; enabled:string[]}; ai:{provider:string; model:string|null};
-  notifications:{discord:boolean; telegram:boolean}}
+  configured:Record<Integration,boolean>; integrations:Record<Integration,boolean>}
 type Server = {started_at:number; monitor:{last_cycle?:number; error?:string|null}}
 const dateTime = (timestamp:number) => new Date(timestamp*1000).toLocaleString()
 
@@ -141,6 +142,15 @@ function App() {
     } catch(e) {setSettingsError((e as Error).message)}
   }
 
+  async function updateIntegration(key:Integration, active:boolean) {
+    if (!settings) return
+    setSettingsError('')
+    try {
+      setSettings(await api<Settings>('/settings/integrations',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...settings.integrations,[key]:active})}))
+    } catch(e) {setSettingsError((e as Error).message)}
+  }
+
   async function runSimulation(event:FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -204,8 +214,12 @@ function App() {
       <h2>Configuración</h2>
       {settingsError && <p role="alert">{settingsError}</p>}
       {settings && <>
-        <p>IA local o externa · {settings.ai.provider} {settings.ai.model ?? ''}</p>
-        <p>Discord {settings.notifications.discord ? 'activo' : 'inactivo'} · Telegram {settings.notifications.telegram ? 'activo' : 'inactivo'}</p>
+        {(['ai','discord','telegram'] as const).map(key=><p key={key}><label>
+          <input type="checkbox" checked={settings.integrations[key]} disabled={!settings.configured[key]}
+            onChange={e=>void updateIntegration(key,e.target.checked)}/>
+          {key === 'ai' ? 'IA · '+settings.ai.provider+' '+(settings.ai.model ?? '') : key === 'discord' ? 'Discord' : 'Telegram'}
+          {!settings.configured[key] && ' · sin configurar'}
+        </label></p>)}
         <h3>Fuentes de noticias</h3>
         {settings.feeds.allowed.length ? settings.feeds.allowed.map(url=><p key={url}><label>
           <input type="checkbox" checked={settings.feeds.enabled.includes(url)} onChange={e=>void updateFeed(url,e.target.checked)}/> {new URL(url).hostname}

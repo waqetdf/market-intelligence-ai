@@ -42,6 +42,38 @@ news_report = {"items": [], "errors": []}
 news_checked = 0
 
 
+class IntegrationSelection(BaseModel):
+    ai: bool
+    discord: bool
+    telegram: bool
+
+
+def integration_availability():
+    return {
+        "ai": os.getenv("MARKET_AI_PROVIDER") in ("ollama", "openai-compatible") and bool(os.getenv("MARKET_AI_MODEL")),
+        "discord": bool(os.getenv("DISCORD_WEBHOOK_URL")),
+        "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
+    }
+
+
+def enabled_integrations():
+    configured = integration_availability()
+    with engine.connect() as connection:
+        saved = connection.scalar(select(settings.c.payload).where(settings.c.key == "integrations")) or {}
+    return {key: available and saved.get(key, True) for key, available in configured.items()}
+
+
+def store_setting(key, payload):
+    statement = settings.update().where(settings.c.key == key).values(payload=payload)
+    with engine.begin() as connection:
+        if connection.execute(statement).rowcount == 0:
+            try:
+                with connection.begin_nested():
+                    connection.execute(settings.insert().values(key=key, payload=payload))
+            except IntegrityError:
+                connection.execute(statement)
+
+
 class FeedSelection(BaseModel):
     urls: list[str] = Field(max_length=10)
 
@@ -109,9 +141,10 @@ async def notify(payload):
         lines += [payload["news"][0]["title"], payload["news"][0]["url"]]
     message = "\n".join(lines)
     messages = []
-    if discord := os.getenv("DISCORD_WEBHOOK_URL"):
+    enabled = enabled_integrations()
+    if enabled["discord"] and (discord := os.getenv("DISCORD_WEBHOOK_URL")):
         messages.append(("discord", discord, {"content": message[:1900], "allowed_mentions": {"parse": []}}))
-    if (telegram := os.getenv("TELEGRAM_BOT_TOKEN")) and (chat := os.getenv("TELEGRAM_CHAT_ID")):
+    if enabled["telegram"] and (telegram := os.getenv("TELEGRAM_BOT_TOKEN")) and (chat := os.getenv("TELEGRAM_CHAT_ID")):
         messages.append(("telegram", f"https://api.telegram.org/bot{telegram}/sendMessage",
                          {"chat_id": chat, "text": message[:3900]}))
     async with httpx.AsyncClient(timeout=10) as client:
@@ -306,8 +339,18 @@ def read_settings():
     return {"feeds": {"allowed": feed_urls(), "enabled": enabled_feeds()},
             "ai": {"provider": os.getenv("MARKET_AI_PROVIDER", "off"),
                    "model": os.getenv("MARKET_AI_MODEL")},
-            "notifications": {"discord": bool(os.getenv("DISCORD_WEBHOOK_URL")),
-                              "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))}}
+            "configured": integration_availability(),
+            "integrations": enabled_integrations()}
+
+
+@api.put("/settings/integrations")
+def set_integrations(selection: IntegrationSelection):
+    configured = integration_availability()
+    requested = selection.model_dump()
+    if any(active and not configured[key] for key, active in requested.items()):
+        raise HTTPException(422, "Configura la integración en el servidor")
+    store_setting("integrations", {key: active for key, active in requested.items() if configured[key]})
+    return read_settings()
 
 
 @api.put("/settings/feeds")
@@ -315,14 +358,7 @@ async def set_feeds(selection: FeedSelection):
     allowed = feed_urls()
     if len(set(selection.urls)) != len(selection.urls) or any(url not in allowed for url in selection.urls):
         raise HTTPException(422, "Selecciona fuentes autorizadas en el servidor")
-    statement = settings.update().where(settings.c.key == "news").values(payload=selection.urls)
-    with engine.begin() as connection:
-        if connection.execute(statement).rowcount == 0:
-            try:
-                with connection.begin_nested():
-                    connection.execute(settings.insert().values(key="news", payload=selection.urls))
-            except IntegrityError:
-                connection.execute(statement)
+    store_setting("news", selection.urls)
     await refresh_news()
     return read_settings()
 
@@ -330,6 +366,8 @@ async def set_feeds(selection: FeedSelection):
 @api.get("/context")
 async def context(symbol: str):
     asset = lookup(symbol)
+    if not enabled_integrations()["ai"]:
+        return {"provider": "off", "text": None}
     bars = await candles(asset, "15m")
     technical = analyze(bars)
     data = {"symbol": symbol, "source": asset.source, "last_close": bars[-1].model_dump() if bars else None,

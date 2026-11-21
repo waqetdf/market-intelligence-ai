@@ -96,3 +96,7 @@ la conexión con Ollama en el host y la activación de copias diarias con
 systemd. Una instalación nueva incluye los RSS oficiales de la Reserva
 Federal y el BCE. Las demás fuentes requieren un endpoint autorizado
 configurado por el operador.
+
+Una vez configurados en `.env`, Ollama o la API externa, Discord y
+Telegram se pueden activar o pausar desde el panel. Las credenciales
+permanecen en el servidor y no se devuelven al navegador.
