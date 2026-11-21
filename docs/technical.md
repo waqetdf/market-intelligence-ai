@@ -73,3 +73,7 @@ desequilibrio empleada. El radio de pivote y la tolerancia de igualdad se
 configuran con `MARKET_SWING_RADIUS` y `MARKET_EQUAL_TOLERANCE`, y el umbral
 MSS y la ventana Order Block con `MARKET_MSS_RANGE_MULTIPLE` y
 `MARKET_BLOCK_LOOKBACK`.
+
+El monitor y el backtest evalúan cada marco de la regla principal con
+hasta 150 velas previas cerradas. Una ruptura declarada falsa antes o en
+el cierre evaluado deja de ser elegible como disparador.

@@ -179,7 +179,7 @@ async def scan_asset(asset):
     for interval, bars in available.items():
         closed = [bar for bar in bars if bar.close_time <= observed]
         if closed and observed - closed[-1].close_time < INTERVALS[interval] * 2:
-            snapshots[interval] = analyze(closed)
+            snapshots[interval] = analyze(closed[-150:])
     current = snapshots["15m"]
     outcome = opportunity(low, snapshots.get("4h"), current, snapshots)
     items = relevant_news(news_report["items"], asset, low, observed)

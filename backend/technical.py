@@ -6,11 +6,12 @@ from statistics import fmean, pstdev
 from backend.market import Candle
 
 
-def ema(values, period):
-    result = values[0]
+def ema_series(values, period):
+    series = [values[0]]
+    alpha = 2 / (period + 1)
     for value in values[1:]:
-        result += 2 / (period + 1) * (value - result)
-    return result
+        series.append(series[-1] + alpha * (value - series[-1]))
+    return series
 
 
 def analyze(bars: list[Candle], swing: int | None = None, tolerance: float | None = None):
@@ -146,9 +147,9 @@ def indicators(bars):
     center = fmean(closes[-20:])
     width = 2 * pstdev(closes[-20:])
     volume = sum(bar.volume for bar in bars)
-    macd_series = [ema(closes[:i], 12) - ema(closes[:i], 26) for i in range(26, len(closes) + 1)]
+    macd_series = [fast - slow for fast, slow in zip(ema_series(closes, 12), ema_series(closes, 26))][25:]
     return dict(
-        sma=center, ema=ema(closes, 20), macd=macd_series[-1], macd_signal=ema(macd_series, 9),
+        sma=center, ema=ema_series(closes, 20)[-1], macd=macd_series[-1], macd_signal=ema_series(macd_series, 9)[-1],
         rsi=100 * gains / (gains + losses) if gains + losses else 50,
         atr=fmean(max(bar.high - bar.low, abs(bar.high - before.close), abs(bar.low - before.close))
                   for before, bar in zip(bars[-15:-1], bars[-14:])),

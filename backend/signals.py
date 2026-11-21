@@ -15,8 +15,10 @@ def opportunity(bars, context, current, frames=None):
         return result
     trend = current["trend"]
     recent = {bar.time for bar in bars[-window:]}
+    invalidated = {event["origin"] for event in current["events"] if event["kind"] == "False Breakout"}
     structure = [event for event in current["events"] if event["time"] in recent
-                 and event["side"] == trend and event["kind"] in ("BOS", "CHoCH")]
+                 and event["time"] not in invalidated and event["kind"] in ("BOS", "CHoCH")
+                 and event["side"] == trend]
     if not structure or context["trend"] != trend:
         result["risks"].append("Sin ruptura reciente alineada con la temporalidad superior")
         return result

@@ -22,3 +22,16 @@ def test_precision_recall_use_all_evaluable_bars():
     assert report["precision"] == report["recall"] == .5
     assert report["false_positives"] == 1
     assert report["without_alert"] == 2
+
+
+def test_opportunity_ignores_a_confirmed_failed_breakout():
+    from backend.signals import opportunity
+
+    bars = [Candle(time=i, close_time=i + 1, open=10,
+                   low=9, high=11, close=10, volume=10) for i in range(36)]
+    current = {"trend": "alcista", "indicators": {"relative_volume": 2}, "support": 9,
+               "events": [{"kind": "BOS", "side": "alcista", "time": 33}]}
+    context = {"trend": "alcista", "indicators": {"rsi": 60}, "events": []}
+    assert opportunity(bars, context, current)["direction"] == "posible compra"
+    current["events"].append({"kind": "False Breakout", "origin": 33, "time": 35})
+    assert opportunity(bars, context, current)["direction"] == "sin señal"
