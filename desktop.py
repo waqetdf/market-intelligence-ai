@@ -64,6 +64,12 @@ class DesktopEvents(QObject):
 
 
 class DesktopWindow(QMainWindow):
+    @Slot()
+    def quit_desktop(self):
+        if getattr(self, "tray", None):
+            self.tray.hide()
+        QApplication.instance().quit()
+
     @Slot(str, str)
     def show_alert(self, title, text):
         self.tray.showMessage(title, text)
@@ -85,7 +91,7 @@ def setup_tray(gui, window, events):
     tray.setToolTip("Market Intelligence AI")
     menu = QMenu(window)
     menu.addAction("Abrir", window.showNormal)
-    menu.addAction("Salir", gui.quit)
+    menu.addAction("Salir", window.quit_desktop)
     tray.setContextMenu(menu)
     tray.activated.connect(lambda reason: window.showNormal() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
     events.alert.connect(window.show_alert, Qt.ConnectionType.QueuedConnection)
@@ -120,7 +126,7 @@ def show_dashboard(gui, directory, runtime, token, smoke_test, events):
     menu.addAction("Crear copia de la base de datos", lambda: backup())
     menu.addAction("Consultar actualizaciones", lambda: QDesktopServices.openUrl(QUrl(
         "https://github.com/waqetdf/market-intelligence-ai/actions/workflows/desktop.yml")))
-    menu.addAction("Salir", gui.quit)
+    menu.addAction("Salir", window.quit_desktop)
     if not smoke_test:
         if sys.platform == "win32" or sys.platform.startswith("linux"):
             config = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation))
