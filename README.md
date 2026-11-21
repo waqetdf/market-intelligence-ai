@@ -71,3 +71,8 @@ una actualización Git fast-forward antes de reconstruir.
 
 Consulta [las reglas del motor](docs/technical.md) para interpretar el análisis
 y la simulación.
+
+Si Docker se construye detrás de un proxy TLS corporativo, proporciona
+su cadena de confianza mediante el secreto de compilación BuildKit
+`build_ca`. El Dockerfile la usa solo durante la instalación y conserva
+la verificación de TLS.

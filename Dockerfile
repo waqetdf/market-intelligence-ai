@@ -1,7 +1,9 @@
 FROM node:24-bookworm-slim AS web
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN --mount=type=secret,id=build_ca \
+    if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi; \
+    npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
@@ -10,7 +12,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /bin/uv
 WORKDIR /app
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev
+RUN --mount=type=secret,id=build_ca \
+    if [ -s /run/secrets/build_ca ]; then export SSL_CERT_FILE=/run/secrets/build_ca; fi; \
+    uv sync --locked --no-dev --system-certs
 COPY backend/ backend/
 COPY --from=web /app/frontend/dist frontend/dist
 EXPOSE 8000
