@@ -30,10 +30,15 @@ la carpeta `mt5` y el registro de la aplicación. Copia los CSV de MT5 a esa
 carpeta y registra el activo en la ventana. Para Binance, por ejemplo,
 añade `BTC/USDT` con el ticker `BTCUSDT`.
 
-Para configurar Ollama, una API externa, fuentes RSS o canales de alerta,
-crea un archivo `.env` en la carpeta de datos con las variables
-correspondientes de [.env.example](../.env.example) y vuelve a abrir la
-aplicación. Un Ollama local puede usar `http://127.0.0.1:11434`.
+Desde **Configuración → Configurar IA y credenciales de notificaciones**
+puedes elegir Ollama, una API compatible con OpenAI o modo técnico,
+y guardar tu webhook de Discord o el token e identificador de Telegram.
+Las contraseñas y tokens se escriben en `integrations.json` en la carpeta
+local del usuario y no se devuelven a la interfaz. El archivo está protegido
+por los permisos de la cuenta y contiene secretos en texto local. Para
+Ollama en el mismo equipo usa `http://127.0.0.1:11434`. También se admite
+el archivo `.env` y los cambios del panel tienen prioridad.
+
 El escritorio crea su propia base SQLite. Los datos de instalaciones
 PostgreSQL requieren una migración aparte.
 
@@ -41,6 +46,8 @@ La bandeja del sistema mantiene el monitor activo al cerrar la ventana y
 muestra notificaciones nativas cuando el sistema admite bandeja. Usa **Salir**
 en Archivo o en la bandeja para detener el motor. En escritorios sin bandeja,
 minimiza la ventana para mantenerla activa. El equipo debe seguir encendido.
+Con **Archivo → Abrir al iniciar sesión** la app se abre al entrar en tu
+cuenta de Windows o Linux. Si hay bandeja disponible, arranca en segundo plano.
 
 **Archivo → Crear copia de la base de datos** genera un archivo SQLite
 consistente en `backups`. La aplicación guarda además una copia automática
@@ -53,8 +60,7 @@ preserva el `market.db` actual y copia la instantánea seleccionada como
 Desde Configuración puedes ajustar la ventana de ruptura, exigir un barrido
 o un FVG abierto en 5m, filtrar por volumen o distancia en ATR y pausar
 señales alrededor de publicaciones oficiales del BLS. Añade o retira RSS
-públicos autorizados en la misma sección. Mantén las credenciales del
-proveedor en el archivo de configuración local.
+públicos autorizados en la misma sección. Las credenciales se gestionan aparte del catálogo público de RSS.
 
 La ventana separa el historial de decisiones, las simulaciones históricas
 guardadas por activo y temporalidad y el seguimiento simulado de alertas

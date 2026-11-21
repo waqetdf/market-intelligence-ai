@@ -54,3 +54,29 @@ def test_forward_only_consumes_the_immediately_following_closed_bar():
     assert round(report["net_return"], 4) == .05
     assert report["mode"] == "simulación de alerta en vivo"
     assert evaluate_alert(dict(alert, observed_at=99), bar) is None
+
+
+def test_local_secrets_are_not_reused_for_a_changed_model_endpoint(tmp_path, monkeypatch):
+    from backend.local_integrations import read_local_integrations, save_local_integrations
+
+    for key in ("MARKET_AI_PROVIDER", "MARKET_AI_URL", "MARKET_AI_MODEL", "MARKET_AI_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, "")
+    save_local_integrations(tmp_path, "ai", ["openai-compatible", "https://example.org", "m", "secret"], False)
+    assert read_local_integrations(tmp_path)["MARKET_AI_TOKEN"] == "secret"
+    save_local_integrations(tmp_path, "ai", ["openai-compatible", "https://example.com", "m", ""], False)
+    assert read_local_integrations(tmp_path)["MARKET_AI_TOKEN"] == ""
+
+
+def test_linux_autostart_is_opt_in_and_quotes_paths(tmp_path, monkeypatch):
+    from backend import desktop_startup
+
+    monkeypatch.setattr(desktop_startup.sys, "platform", "linux")
+    entrypoint = tmp_path / "app folder" / "100% desktop.py"
+    assert not desktop_startup.startup_enabled(tmp_path)
+    desktop_startup.set_startup(tmp_path, entrypoint, True)
+    command = desktop_startup.linux_startup_path(tmp_path).read_text()
+    assert '100%% desktop.py" "--background"' in command
+    assert desktop_startup.startup_enabled(tmp_path)
+    desktop_startup.set_startup(tmp_path, entrypoint, False)
+    assert not desktop_startup.startup_enabled(tmp_path)

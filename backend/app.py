@@ -2,12 +2,13 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import logging
 import os
+import re
 from pathlib import Path
 from ipaddress import ip_address
 import secrets
 from time import time
 from uuid import uuid4
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -15,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 import httpx
-from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, cast, create_engine, select
+from sqlalchemy import JSON, BigInteger, Column, MetaData, String, Table, cast, create_engine, func, select
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 from backend.alerts import notify
 from backend.calendar import fetch_schedule, nearby_releases
 from backend.forward import evaluate_alert
+from backend.local_integrations import INTEGRATION_KEYS, save_local_integrations
 from backend.market import Asset, INTERVALS, get_candles
 from backend.news import commentary, feed_urls, fetch_news, relevant_news
 from backend.signals import CONTEXT_FRAMES, Strategy, assess_quality, default_strategy, opportunity, replay, strategy_signature
@@ -303,7 +305,9 @@ async def monitor():
                 await refresh_calendar()
             for item in stored(assets):
                 try:
-                    await scan_asset(Asset.model_validate(item))
+                    asset = Asset.model_validate(item)
+                    if asset.enabled:
+                        await scan_asset(asset)
                 except Exception:
                     log.exception("Asset scan failed")
             monitor_state.update(last_cycle=int(time()), error=None)
@@ -348,7 +352,7 @@ def health():
 
 @api.get("/assets")
 def list_assets():
-    return stored(assets)
+    return [Asset.model_validate(item) for item in stored(assets)]
 
 
 @api.post("/assets", status_code=201)
@@ -359,6 +363,31 @@ def add_asset(asset: Asset):
     except IntegrityError as exc:
         raise HTTPException(409, "El símbolo ya existe") from exc
     return asset
+
+
+class AssetMonitor(BaseModel):
+    symbol: str = Field(max_length=24)
+    enabled: bool
+
+
+@api.put("/assets/monitor")
+def set_asset_monitor(request: AssetMonitor):
+    asset = lookup(request.symbol).model_copy(update={"enabled": request.enabled})
+    with engine.begin() as connection:
+        connection.execute(assets.update().where(assets.c.symbol == request.symbol)
+                           .values(payload=asset.model_dump()))
+    return asset
+
+
+@api.get("/overview")
+def overview():
+    latest = (select(decisions.c.payload, func.row_number()
+                     .over(partition_by=decisions.c.symbol, order_by=decisions.c.observed_at.desc())
+                     .label("sequence")).subquery())
+    with engine.connect() as connection:
+        observations = {item["symbol"]: item for item in connection.scalars(
+            select(latest.c.payload).where(latest.c.sequence == 1))}
+    return [{"asset": asset, "latest": observations.get(asset.symbol)} for asset in list_assets()]
 
 
 def lookup(symbol):
@@ -472,7 +501,8 @@ async def news():
 def read_settings():
     return {"strategy": active_strategy(), "feeds": {"allowed": configured_feeds(), "enabled": enabled_feeds(),
                                                      "editable": os.getenv("MARKET_DESKTOP") == "1"},
-            "ai": {"provider": os.getenv("MARKET_AI_PROVIDER", "off"),
+            "local_configuration": os.getenv("MARKET_DESKTOP") == "1",
+            "ai": {"provider": os.getenv("MARKET_AI_PROVIDER") or "off",
                    "model": os.getenv("MARKET_AI_MODEL")},
             "configured": integration_availability(),
             "integrations": enabled_integrations()}
@@ -481,6 +511,55 @@ def read_settings():
 @api.put("/settings/strategy")
 def set_strategy(selection: Strategy):
     store_setting("strategy", selection.model_dump())
+    return read_settings()
+
+
+class LocalIntegration(BaseModel):
+    integration: Literal["ai", "discord", "telegram"]
+    values: list[str] = Field(max_length=4)
+    clear: bool = False
+
+
+def valid_service_url(url, *, local=False):
+    try:
+        parsed = urlsplit(url)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.port == 0:
+            return False
+        if parsed.scheme == "https":
+            return bool(parsed.hostname)
+        return local and parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    except ValueError:
+        return False
+
+
+@api.put("/settings/local-integration")
+def configure_local_integration(request: LocalIntegration):
+    if os.getenv("MARKET_DESKTOP") != "1":
+        raise HTTPException(403, "La configuración de credenciales se realiza en el equipo local")
+    keys = INTEGRATION_KEYS[request.integration]
+    values = [value.strip() for value in request.values]
+    if len(values) != len(keys) or any(len(value) > 1024 or "\x00" in value for value in values):
+        raise HTTPException(422, "Configuración de integración inválida")
+    if not request.clear:
+        if request.integration == "ai":
+            provider, endpoint, model, _ = values
+            if provider not in ("off", "ollama", "openai-compatible"):
+                raise HTTPException(422, "Selecciona un proveedor de IA válido")
+            if provider != "off" and (not model or not valid_service_url(endpoint, local=provider == "ollama")):
+                raise HTTPException(422, "Introduce el modelo y su URL HTTPS o una URL local para Ollama")
+        elif request.integration == "discord":
+            url, = values
+            if not (valid_service_url(url) and urlsplit(url).hostname == "discord.com"
+                    and urlsplit(url).port in (None, 443)
+                    and re.fullmatch(r"/api/webhooks/[0-9]+/[A-Za-z0-9_-]+", urlsplit(url).path)):
+                raise HTTPException(422, "Introduce un webhook oficial de Discord")
+        elif not (re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", values[0])
+                  and re.fullmatch(r"-?[0-9]+|@[A-Za-z0-9_]+", values[1])):
+            raise HTTPException(422, "Introduce el token y el identificador del chat de Telegram")
+    try:
+        save_local_integrations(data, request.integration, values, request.clear)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(500, "No se pudo guardar la configuración local") from exc
     return read_settings()
 
 
@@ -497,10 +576,10 @@ def set_integrations(selection: IntegrationSelection):
 def valid_feed_url(url):
     try:
         parsed = urlsplit(url)
-        host = parsed.hostname
+        host = (parsed.hostname or "").rstrip(".")
         if (parsed.scheme != "https" or not host or "." not in host
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
-                or parsed.port not in (None, 443) or host.endswith((".localhost", ".local", ".internal"))):
+                or parsed.port not in (None, 443) or not re.fullmatch(r"[a-z0-9.-]+", host) or host.endswith((".localhost", ".local", ".internal"))):
             return False
         try:
             ip_address(host)

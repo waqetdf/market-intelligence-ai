@@ -77,3 +77,17 @@ def test_admin_controls_only_preconfigured_integrations(tmp_path, monkeypatch):
         payload["telegram"] = False
         assert client.put("/api/settings/integrations", json=payload).status_code == 200
         assert not client.get("/api/settings").json()["integrations"]["discord"]
+
+
+def test_overview_stays_available_when_asset_is_paused(tmp_path, monkeypatch):
+    monkeypatch.setattr(application, "engine", create_engine(f"sqlite:///{tmp_path / 'market.db'}"))
+    monkeypatch.setattr(application, "data", tmp_path)
+    monkeypatch.setenv("MARKET_CALENDAR_ENABLED", "0")
+    with TestClient(application.app) as client:
+        payload = {"symbol": "BTC/USDT", "source": "binance", "ticker": "BTCUSDT"}
+        assert client.post("/api/assets", json=payload).json()["enabled"]
+        assert client.put("/api/assets/monitor", json={"symbol": payload["symbol"], "enabled": False}).status_code == 200
+        summary, = client.get("/api/overview").json()
+        assert summary["asset"]["symbol"] == payload["symbol"]
+        assert not summary["asset"]["enabled"]
+        assert summary["latest"] is None

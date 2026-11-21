@@ -1,16 +1,26 @@
 """Official BLS release schedule with scheduled times normalized to UTC."""
 
 from datetime import datetime, timezone
+from functools import lru_cache
+from importlib.resources import files
 import re
 from zoneinfo import ZoneInfo
 
 import httpx
+import tzdata
 
 BLS_CALENDAR = "https://www.bls.gov/schedule/news_release/bls.ics"
 MAJOR_RELEASE = re.compile(
     r"^(consumer price index|producer price index|employment situation|job openings and labor turnover)",
     re.IGNORECASE,
 )
+
+
+@lru_cache(maxsize=1)
+def eastern_timezone():
+    resource = files(tzdata).joinpath("zoneinfo", "America", "New_York")
+    with resource.open("rb") as handle:
+        return ZoneInfo.from_file(handle, "America/New_York")
 
 
 def parse_schedule(content):
@@ -27,7 +37,7 @@ def parse_schedule(content):
                     if start.endswith("Z"):
                         stamp = datetime.strptime(start, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
                     elif fields.get("timezone") in {"US-Eastern", "America/New_York"}:
-                        stamp = datetime.strptime(start, "%Y%m%dT%H%M%S").replace(tzinfo=ZoneInfo("America/New_York"))
+                        stamp = datetime.strptime(start, "%Y%m%dT%H%M%S").replace(tzinfo=eastern_timezone())
                     else:
                         raise ValueError("unspecified release timezone")
                 except ValueError:

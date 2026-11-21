@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client'
 import {CandlestickSeries, ColorType, createChart, type UTCTimestamp} from 'lightweight-charts'
 import './style.css'
 
-type Asset = {symbol:string; source:string; ticker:string}
+type Asset = {symbol:string; source:string; ticker:string; enabled:boolean}
 type Bar = {time:UTCTimestamp; open:number; high:number; low:number; close:number}
 type Event = {kind:string; side:string; level:number; time:number}
 type Result = {bars:Bar[]; source:string; technical:{trend:string; events:Event[]; indicators:Record<string, number | number[] | null>}}
@@ -17,8 +17,9 @@ type Alert = {symbol:string; direction:string; price:number; observed_at:number;
   quality?:{status:string; sample?:number}; interest_zone?:number[]; calendar?:Release[];
   risks?:string[]; invalidation?:number|null; target?:number|null; reward_risk?:number|null;
   chart?:string|null; news?:News[]; assessment?:{text:string}; trends?:Record<string,string>}
+type MarketSummary = {asset:Asset; latest:Alert|null}
 type Integration = 'ai' | 'discord' | 'telegram'
-type Settings = {strategy:Strategy; feeds:{allowed:string[]; enabled:string[]; editable:boolean}; ai:{provider:string; model:string|null};
+type Settings = {local_configuration:boolean; strategy:Strategy; feeds:{allowed:string[]; enabled:string[]; editable:boolean}; ai:{provider:string; model:string|null};
   configured:Record<Integration,boolean>; integrations:Record<Integration,boolean>}
 type Server = {started_at:number; monitor:{last_cycle?:number; error?:string|null}}
 const dateTime = (timestamp:number) => new Date(timestamp*1000).toLocaleString()
@@ -81,6 +82,7 @@ const timeframes = ['1m','5m','15m','30m','1h','4h','1d','1w']
 
 function App() {
   const [assets,setAssets] = useState<Asset[]>([])
+  const [overview,setOverview] = useState<MarketSummary[]>([])
   const [symbol,setSymbol] = useState('')
   const requestedInterval = initialParams.get('interval') ?? ''
   const [interval,setInterval] = useState(timeframes.includes(requestedInterval) ? requestedInterval : '15m')
@@ -112,8 +114,8 @@ function App() {
     api<Settings>('/settings').then(setSettings).catch(e=>setSettingsError(e.message))
     const refresh = () => {
       void Promise.allSettled([
+        api<MarketSummary[]>('/overview').then(setOverview),
         api<Alert[]>('/alerts').then(setAlerts),
-        api<Alert[]>('/history').then(setHistory),
         api<{items:News[]}>('/news').then(data=>setNews(data.items)),
         api<Server>('/server').then(setServer),
         api<{items:Release[]; error?:string|null}>('/calendar').then(setCalendar),
@@ -139,6 +141,7 @@ function App() {
     setLoading(true)
     setError('')
     const refresh = () => {
+      void api<Alert[]>('/history?'+new URLSearchParams({symbol}),{signal:controller.signal}).then(setHistory).catch(()=>{})
       void api<Forward>('/forward?'+new URLSearchParams({symbol}),{signal:controller.signal}).then(setForward).catch(()=>{})
       return api<Result>('/candles?'+new URLSearchParams({symbol,interval}),{signal:controller.signal})
       .then(setResult).catch(e => {if (!controller.signal.aborted) setError(e.message)})
@@ -174,6 +177,30 @@ function App() {
     try {
       setSettings(await api<Settings>('/settings/integrations',{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({...settings.integrations,[key]:active})}))
+    } catch(e) {setSettingsError((e as Error).message)}
+  }
+
+  async function toggleMonitor(asset:Asset) {
+    setFormError('')
+    try {
+      const updated = await api<Asset>('/assets/monitor',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({symbol:asset.symbol,enabled:!asset.enabled})})
+      setAssets(items=>items.map(item=>item.symbol===updated.symbol ? updated : item))
+    } catch(e) {setFormError((e as Error).message)}
+  }
+
+  async function saveLocalIntegration(event:FormEvent<HTMLFormElement>, integration:Integration) {
+    event.preventDefault()
+    const element = event.currentTarget
+    const form = new FormData(element)
+    const fields = integration === 'ai' ? ['provider','endpoint','model','credential'] :
+      integration === 'telegram' ? ['credential','chat'] : ['credential']
+    const clear = (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'clear'
+    setSettingsError('')
+    try {
+      setSettings(await api<Settings>('/settings/local-integration',{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({integration,values:fields.map(key=>String(form.get(key) ?? '')),clear})}))
+      element.reset()
     } catch(e) {setSettingsError((e as Error).message)}
   }
 
@@ -233,6 +260,15 @@ function App() {
         {error ? <p role="alert">{error}</p> : loading ? <p>Cargando velas cerradas…</p> : result?.bars.length ? <><Chart result={result} overlays={overlays} levels={levels}/><p>{result.source} · Tendencia {result.technical.trend} · Último cierre {result.bars.at(-1)?.close}</p><dl>{Object.entries(result.technical.indicators).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.map(v=>v.toFixed(2)).join(' – ') : value?.toFixed(2) ?? '—'}</dd></div>)}</dl></> : <p>{symbol ? 'Sin velas cerradas disponibles' : 'Añade un activo para ver sus velas'}</p>}
       </article>
       <aside className="panel">
+        <h2>Resumen del mercado</h2>
+        {assets.length ? assets.map(asset=>{
+          const latest = overview.find(item=>item.asset.symbol===asset.symbol)?.latest
+          return <p key={asset.symbol}>
+            <button onClick={()=>setSymbol(asset.symbol)}>{asset.symbol}</button>
+            {' '}{latest ? <span>{latest.price} · {latest.trends?.['4h'] ?? '4h sin datos'}<br/>{dateTime(latest.observed_at)}</span> : <span>Sin observaciones</span>}
+            <br/><label><input type="checkbox" checked={asset.enabled} onChange={()=>void toggleMonitor(asset)}/> Vigilar</label>
+          </p>
+        }) : <p>Sin activos vigilados.</p>}
         <h2>Añadir activo</h2>
         <form onSubmit={add}>
           <label>Símbolo <input name="symbol" required maxLength={24} placeholder="XAUUSD"/></label>
@@ -294,6 +330,28 @@ function App() {
           {key === 'ai' ? 'IA · '+settings.ai.provider+' '+(settings.ai.model ?? '') : key === 'discord' ? 'Discord' : 'Telegram'}
           {!settings.configured[key] && ' · sin configurar'}
         </label></p>)}
+        {settings.local_configuration && <details>
+          <summary>Configurar IA y credenciales de notificaciones</summary>
+          <form onSubmit={event=>void saveLocalIntegration(event,'ai')}>
+            <label>Proveedor <select name="provider" defaultValue={settings.ai.provider}>
+              <option value="off">Desactivado</option><option value="ollama">Ollama</option>
+              <option value="openai-compatible">API compatible con OpenAI</option>
+            </select></label>
+            <label>URL del modelo <input name="endpoint" type="url" placeholder="http://127.0.0.1:11434"/></label>
+            <label>Modelo <input name="model" defaultValue={settings.ai.model ?? ''}/></label>
+            <label>Token opcional <input name="credential" type="password" autoComplete="new-password"/></label>
+            <button>Guardar IA</button><button value="clear" formNoValidate>Quitar credenciales de IA</button>
+          </form>
+          <form onSubmit={event=>void saveLocalIntegration(event,'discord')}>
+            <label>Webhook de Discord <input name="credential" type="password" autoComplete="new-password" required/></label>
+            <button>Guardar Discord</button><button value="clear" formNoValidate>Quitar Discord</button>
+          </form>
+          <form onSubmit={event=>void saveLocalIntegration(event,'telegram')}>
+            <label>Token del bot <input name="credential" type="password" autoComplete="new-password" required/></label>
+            <label>ID del chat <input name="chat" required/></label>
+            <button>Guardar Telegram</button><button value="clear" formNoValidate>Quitar Telegram</button>
+          </form>
+        </details>}
         <h3>Reglas de alertas y simulación</h3>
         <form key={JSON.stringify(settings.strategy)} onSubmit={saveStrategy}>
           <label>Ventana de ruptura en velas <input name="window" type="number" min={1} max={50} defaultValue={settings.strategy.window} required/></label>

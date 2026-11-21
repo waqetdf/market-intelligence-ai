@@ -8,3 +8,4 @@ data/
 backups/
 build/
 *.spec
+integrations.json

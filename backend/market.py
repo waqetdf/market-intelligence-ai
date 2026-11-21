@@ -54,6 +54,7 @@ class Asset(BaseModel):
     symbol: Annotated[str, Field(pattern=r"^[A-Z0-9][A-Z0-9._/-]{0,23}$")]
     source: Annotated[str, Field(pattern=r"^(binance|mt5-csv)$")]
     ticker: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")]
+    enabled: bool = True
 
 
 def closed_candles(rows: list[Candle], now: int, limit: int) -> list[Candle]:

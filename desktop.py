@@ -17,7 +17,9 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QStyle, QSystemTrayIcon
 
 from backend.desktop_runtime import DesktopRuntime, TOKEN_HEADER
+from backend.desktop_startup import set_startup, startup_enabled
 from backend.local_backup import backup_database
+from backend.local_integrations import apply_local_integrations, read_local_integrations
 
 
 def is_local(url, port):
@@ -118,13 +120,28 @@ def show_dashboard(gui, directory, runtime, token, smoke_test, events):
     menu.addAction("Crear copia de la base de datos", lambda: backup())
     menu.addAction("Salir", gui.quit)
     if not smoke_test:
+        if sys.platform == "win32" or sys.platform.startswith("linux"):
+            config = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation))
+            startup = menu.addAction("Abrir al iniciar sesión")
+            startup.setCheckable(True)
+            startup.setChecked(startup_enabled(config))
+
+            def change_startup(enabled):
+                try:
+                    set_startup(config, Path(__file__).resolve(), enabled)
+                except (OSError, ValueError):
+                    startup.setChecked(not enabled)
+                    QMessageBox.warning(window, "Inicio de sesión", "No se pudo cambiar el inicio automático.")
+
+            startup.triggered.connect(change_startup)
         setup_tray(gui, window, events)
         backup_timer = QTimer(window)
         backup_timer.timeout.connect(lambda: backup(automatic=True))
         backup_timer.start(60 * 60 * 1000)
         QTimer.singleShot(1000, lambda: backup(automatic=True))
     page.load(QUrl(f"http://127.0.0.1:{runtime.port}/"))
-    window.show()
+    if "--background" not in sys.argv or not getattr(window, "tray", None):
+        window.show()
     if smoke_test:
         timer = QTimer(window)
 
@@ -163,6 +180,7 @@ def main():
         if not (frontend / "index.html").is_file():
             raise RuntimeError("Falta compilar el panel. Consulta la guía de escritorio.")
         load_dotenv(directory / ".env")
+        apply_local_integrations(read_local_integrations(directory))
         os.environ.setdefault("MARKET_NEWS_FEEDS",
                               "https://www.federalreserve.gov/feeds/press_monetary.xml,"
                               "https://www.ecb.europa.eu/rss/press.html")
@@ -186,7 +204,7 @@ def main():
                 return show_dashboard(gui, directory, runtime, token, smoke_test, events)
         finally:
             engine.dispose()
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         if not smoke_test:
             QMessageBox.critical(None, "Market Intelligence AI", str(exc))
         return 1
